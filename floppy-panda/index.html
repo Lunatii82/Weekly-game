@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Floppy Panda</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #game-wrapper {
+    position: relative;
+    display: inline-block;
+  }
+  canvas {
+    display: block;
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.6);
+    cursor: pointer;
+    touch-action: none;
+  }
+  #pseudo-screen {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(10,10,30,0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    border-radius: 12px;
+  }
+  .pseudo-box {
+    background: #fff;
+    border-radius: 16px;
+    padding: 32px 40px;
+    text-align: center;
+    width: 290px;
+    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
+  }
+  .pseudo-box .icon { font-size: 52px; margin-bottom: 6px; }
+  .pseudo-box h2 { font-size: 22px; color: #1a1a2e; margin-bottom: 4px; }
+  .pseudo-box p { font-size: 13px; color: #888; margin-bottom: 22px; line-height: 1.5; }
+  .pseudo-box input {
+    width: 100%;
+    padding: 10px 14px;
+    border: 2px solid #ddd;
+    border-radius: 8px;
+    font-size: 16px;
+    outline: none;
+    text-align: center;
+    margin-bottom: 14px;
+    transition: border-color 0.2s;
+    color: #222;
+  }
+  .pseudo-box input:focus { border-color: #4CAF50; }
+  .pseudo-box button {
+    width: 100%;
+    padding: 12px;
+    background: #4CAF50;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+  .pseudo-box button:hover { background: #388E3C; }
+  #change-pseudo {
+    position: absolute;
+    bottom: 8px; right: 10px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.4);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 4px 6px;
+    transition: color 0.2s;
+  }
+  #change-pseudo:hover { color: rgba(255,255,255,0.85); }
+  #back-link {
+    margin-top: 14px;
+    font-size: 12px;
+    color: rgba(255,255,255,0.35);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  #back-link:hover { color: rgba(255,255,255,0.8); }
+</style>
+</head>
+<body>
+<div id="game-wrapper">
+  <div id="pseudo-screen">
+    <div class="pseudo-box">
+      <div class="icon">🐼</div>
+      <h2>Floppy Panda</h2>
+      <p>Entre ton pseudo pour participer<br>au classement du serveur</p>
+      <input type="text" id="pseudo-input" placeholder="Ton pseudo" maxlength="20" autocomplete="off" spellcheck="false">
+      <button id="pseudo-btn">Jouer !</button>
+    </div>
+  </div>
+  <canvas id="c" width="480" height="520"></canvas>
+  <button id="change-pseudo">✏️ changer de pseudo</button>
+</div>
+<a id="back-link" href="../arcade/">← Lunatii Arcade</a>
+
+<script>
+const SUPABASE_URL = 'https://rqybsymsxjhblpmwwkod.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_Kzg89oIvbVe3VKbV9efA6g_Ip-4mFuH';
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+
+// --- Physics ---
+const GRAVITY       = 0.07;
+const JUMP          = -3.0;
+const SPEED         = 1.5;
+const PIPE_INTERVAL = 160;
+const GAP           = 150;
+const PIPE_W        = 52;
+const GROUND_H      = 30;
+const W             = 480;
+const H             = 520;
+const FLOOR         = H - GROUND_H;
+const PANDA_R       = 22;
+const PANDA_X       = 110;
+
+// --- Pseudo ---
+let pseudo = localStorage.getItem('flappypanda_pseudo') || '';
+const pseudoScreen = document.getElementById('pseudo-screen');
+const pseudoInput  = document.getElementById('pseudo-input');
+const pseudoBtn    = document.getElementById('pseudo-btn');
+const changePseudo = document.getElementById('change-pseudo');
+
+function showPseudoScreen() {
+  pseudoScreen.style.display = 'flex';
+  pseudoInput.value = pseudo;
+  setTimeout(() => pseudoInput.focus(), 80);
+}
+function hidePseudoScreen() {
+  pseudoScreen.style.display = 'none';
+}
+
+if (pseudo) hidePseudoScreen();
+else showPseudoScreen();
+
+function submitPseudo() {
+  const val = pseudoInput.value.trim();
+  if (!val) { pseudoInput.focus(); return; }
+  pseudo = val;
+  localStorage.setItem('flappypanda_pseudo', pseudo);
+  hidePseudoScreen();
+}
+pseudoBtn.addEventListener('click', submitPseudo);
+pseudoInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitPseudo(); });
+changePseudo.addEventListener('click', () => showPseudoScreen());
+
+// --- State ---
+let state      = 'idle';
+let score      = 0;
+let best       = parseInt(localStorage.getItem('flappypanda_best') || '0');
+let bestDate   = localStorage.getItem('flappypanda_best_date') || '';
+let vy         = 0;
+let py         = H / 2 - 20;
+let pipes      = [];
+let frame      = 0;
+let clouds     = [];
+let deathTimer = 0;
+let leaderboard  = [];
+let loadingLb    = false;
+
+function initClouds() {
+  clouds = [
+    { x: 60,  y: 60,  rx: 38, ry: 18, a: 0.55 },
+    { x: 220, y: 40,  rx: 52, ry: 22, a: 0.45 },
+    { x: 380, y: 80,  rx: 44, ry: 18, a: 0.50 },
+    { x: 140, y: 110, rx: 30, ry: 14, a: 0.35 },
+    { x: 320, y: 130, rx: 36, ry: 16, a: 0.40 },
+  ];
+}
+initClouds();
+
+// --- Supabase ---
+async function sendScore(p, s) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/scores`, {
+      method: 'POST',
+      headers: {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        'Content-Type': 'application/json',
+        'Prefer': 'resolution=merge-duplicates'
+      },
+      body: JSON.stringify({ jeu: 'floppy-panda', pseudo: p, score: s })
+    });
+  } catch(_) {}
+}
+
+async function fetchLeaderboard() {
+  loadingLb = true;
+  leaderboard = [];
+  try {
+    const res = await fetch(
+      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&order=score.desc&limit=5&select=pseudo,score`,
+      { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
+    );
+    if (res.ok) leaderboard = await res.json();
+  } catch(_) {}
+  loadingLb = false;
+}
+
+// --- Input ---
+function jump() {
+  if (pseudoScreen.style.display !== 'none') return;
+  if (state === 'idle')   { startGame(); return; }
+  if (state === 'dead')   { if (deathTimer > 40) resetGame(); return; }
+  if (state === 'playing') vy = JUMP;
+}
+
+document.addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') { e.preventDefault(); jump(); }
+});
+canvas.addEventListener('mousedown',  e => { e.preventDefault(); jump(); });
+canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { passive: false });
+
+// --- Game control ---
+function startGame() {
+  state = 'playing'; score = 0; frame = 0; pipes = [];
+  vy = JUMP; py = H / 2 - 20;
+}
+
+function resetGame() {
+  state = 'idle'; score = 0; frame = 0; pipes = [];
+  vy = 0; py = H / 2 - 20; deathTimer = 0; leaderboard = [];
+}
+
+function die() {
+  if (state !== 'playing') return;
+  state = 'dead';
+  deathTimer = 0;
+  if (score > best) {
+    best = score;
+    const now = new Date();
+    bestDate = `${String(now.getDate()).padStart(2,'0')}/${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
+    localStorage.setItem('flappypanda_best', best);
+    localStorage.setItem('flappypanda_best_date', bestDate);
+    if (pseudo) sendScore(pseudo, best);
+  }
+  fetchLeaderboard();
+}
+
+// --- Pipes ---
+function spawnPipe() {
+  const minTop = 60;
+  const maxTop = FLOOR - GAP - 60;
+  const topH   = minTop + Math.random() * (maxTop - minTop);
+  pipes.push({ x: W + PIPE_W, topH, scored: false });
+}
+
+// --- Collision ---
+function circleRect(cx, cy, r, rx, ry, rw, rh) {
+  const nearX = Math.max(rx, Math.min(cx, rx + rw));
+  const nearY = Math.max(ry, Math.min(cy, ry + rh));
+  const dx = cx - nearX, dy = cy - nearY;
+  return dx * dx + dy * dy < r * r;
+}
+
+// --- Draw ---
+function drawBackground() {
+  const grad = ctx.createLinearGradient(0, 0, 0, FLOOR);
+  grad.addColorStop(0,   '#87CEEB');
+  grad.addColorStop(0.7, '#B8E4C9');
+  grad.addColorStop(1,   '#90D4A0');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, FLOOR);
+
+  ctx.save();
+  for (const cl of clouds) {
+    ctx.globalAlpha = cl.a;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.ellipse(cl.x, cl.y, cl.rx, cl.ry, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cl.x - cl.rx*0.4, cl.y+4, cl.rx*0.65, cl.ry*0.8, 0, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(cl.x + cl.rx*0.4, cl.y+2, cl.rx*0.55, cl.ry*0.7, 0, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+
+  ctx.fillStyle = '#5A8A3C'; ctx.fillRect(0, FLOOR, W, GROUND_H);
+  ctx.fillStyle = '#4A7A2C'; ctx.fillRect(0, FLOOR, W, 6);
+  ctx.fillStyle = '#6AAA4C';
+  for (let gx = 10; gx < W; gx += 28) {
+    ctx.beginPath(); ctx.arc(gx, FLOOR+3, 5, Math.PI, 0); ctx.fill();
+  }
+}
+
+function drawBamboo(x, topH) {
+  const botY = topH + GAP;
+  const botH = FLOOR - botY;
+
+  function drawStem(sx, sy, sw, sh) {
+    if (sh <= 0) return;
+    const g = ctx.createLinearGradient(sx, 0, sx+sw, 0);
+    g.addColorStop(0,   '#4CAF50'); g.addColorStop(0.3, '#66BB6A');
+    g.addColorStop(0.6, '#81C784'); g.addColorStop(1,   '#388E3C');
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.roundRect(sx, sy, sw, sh, 4); ctx.fill();
+    ctx.strokeStyle = '#2E7D32'; ctx.lineWidth = 1.5;
+    for (let seg_y = sy+28; seg_y < sy+sh-4; seg_y += 28) {
+      ctx.beginPath(); ctx.moveTo(sx+2, seg_y); ctx.lineTo(sx+sw-2, seg_y); ctx.stroke();
+      ctx.fillStyle = '#388E3C'; ctx.fillRect(sx-2, seg_y-3, sw+4, 6);
+      ctx.fillStyle = g;         ctx.fillRect(sx,   seg_y-2, sw,   4);
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath(); ctx.roundRect(sx+4, sy+6, sw*0.25, sh-12, 3); ctx.fill();
+  }
+
+  function drawLeaves(lx, ly, isTop) {
+    const dir = isTop ? 1 : -1;
+    ctx.save(); ctx.translate(lx-4, ly); ctx.rotate(dir*-0.45);
+    ctx.fillStyle='#66BB6A'; ctx.beginPath(); ctx.ellipse(0,0,22,9,0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#388E3C'; ctx.lineWidth=0.8; ctx.beginPath(); ctx.moveTo(-20,0); ctx.lineTo(20,0); ctx.stroke();
+    ctx.restore();
+    ctx.save(); ctx.translate(lx+PIPE_W+4, ly); ctx.rotate(dir*0.45);
+    ctx.fillStyle='#81C784'; ctx.beginPath(); ctx.ellipse(0,0,22,9,0,0,Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#388E3C'; ctx.lineWidth=0.8; ctx.beginPath(); ctx.moveTo(-20,0); ctx.lineTo(20,0); ctx.stroke();
+    ctx.restore();
+  }
+
+  drawStem(x, 0, PIPE_W, topH); drawLeaves(x, topH, true);
+  drawStem(x, botY, PIPE_W, botH); drawLeaves(x, botY, false);
+}
+
+function drawPanda(px_, py_, vy_) {
+  const angle = Math.max(-0.4, Math.min(0.9, vy_ * 0.055));
+  ctx.save(); ctx.translate(px_, py_); ctx.rotate(angle);
+
+  ctx.fillStyle='rgba(0,0,0,0.10)'; ctx.beginPath(); ctx.ellipse(2,26,18,6,0,0,Math.PI*2); ctx.fill();
+
+  const bg = ctx.createRadialGradient(-4,-6,4,0,0,26);
+  bg.addColorStop(0,'#FFFFFF'); bg.addColorStop(1,'#D8D8D8');
+  ctx.fillStyle=bg; ctx.beginPath(); ctx.ellipse(0,2,21,22,0,0,Math.PI*2); ctx.fill();
+  ctx.strokeStyle='#BBBBBB'; ctx.lineWidth=0.8; ctx.stroke();
+
+  ctx.fillStyle='#222222';
+  ctx.beginPath(); ctx.arc(-13,-18,9,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(13,-18,9,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#3a3a3a';
+  ctx.beginPath(); ctx.arc(-13,-18,5,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(13,-18,5,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#111111';
+  ctx.beginPath(); ctx.ellipse(-8,-6,8,7,-0.3,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(8,-6,8,7,0.3,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#FFFFFF';
+  ctx.beginPath(); ctx.arc(-8,-7,4,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(8,-7,4,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#111111';
+  ctx.beginPath(); ctx.arc(-7.5,-7,2.2,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(8.5,-7,2.2,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#FFFFFF';
+  ctx.beginPath(); ctx.arc(-6.5,-8,1,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(9.5,-8,1,0,Math.PI*2); ctx.fill();
+
+  ctx.fillStyle='#F4C2C2'; ctx.beginPath(); ctx.ellipse(0,3,9,7,0,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#C48080'; ctx.beginPath(); ctx.ellipse(0,1,4,2.5,0,0,Math.PI*2); ctx.fill();
+
+  ctx.strokeStyle='#A06060'; ctx.lineWidth=1.2;
+  ctx.beginPath(); ctx.moveTo(-4,5); ctx.quadraticCurveTo(0,9,4,5); ctx.stroke();
+
+  ctx.fillStyle='#D0D0D0'; ctx.strokeStyle='#AAAAAA'; ctx.lineWidth=0.7;
+  ctx.beginPath(); ctx.ellipse(-10,18,7,4,0.3,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(10,18,7,4,-0.3,0,Math.PI*2); ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle='rgba(220,220,220,0.5)'; ctx.beginPath(); ctx.ellipse(0,8,10,10,0,0,Math.PI*2); ctx.fill();
+
+  ctx.restore();
+}
+
+function drawScore() {
+  const txt = String(score);
+  ctx.save();
+  const pad=14, w=Math.max(60, txt.length*22+pad*2), x=W/2-w/2;
+  ctx.fillStyle='rgba(255,255,255,0.75)';
+  ctx.beginPath(); ctx.roundRect(x,14,w,42,10); ctx.fill();
+  ctx.fillStyle='#333'; ctx.font='bold 28px "Segoe UI",Arial,sans-serif';
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.fillText(txt, W/2, 36);
+  ctx.restore();
+}
+
+function drawOverlay(lines, sub) {
+  ctx.fillStyle='rgba(0,0,0,0.45)'; ctx.fillRect(0,0,W,H);
+  const cx=W/2, cy=H/2-20;
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,0.92)';
+  ctx.beginPath(); ctx.roundRect(cx-160,cy-70,320,160+(sub?36:0),18); ctx.fill();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  ctx.font='38px serif'; ctx.fillText('🐼',cx,cy-40);
+  ctx.fillStyle='#222'; ctx.font='bold 26px "Segoe UI",Arial,sans-serif';
+  ctx.fillText(lines[0],cx,cy+4);
+  if (lines[1]) { ctx.font='16px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#555'; ctx.fillText(lines[1],cx,cy+32); }
+  if (sub) { ctx.font='13px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#888'; ctx.fillText(sub,cx,cy+60); }
+  ctx.restore();
+}
+
+function drawDead() {
+  ctx.fillStyle='rgba(0,0,0,0.50)'; ctx.fillRect(0,0,W,H);
+  const cx  = W/2;
+  const boxH = 335;
+  const boxY = Math.max(8, H/2 - boxH/2 - 5);
+
+  ctx.save();
+  ctx.fillStyle='rgba(255,255,255,0.95)';
+  ctx.beginPath(); ctx.roundRect(cx-165, boxY, 330, boxH, 18); ctx.fill();
+
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  let y = boxY + 36;
+
+  ctx.font='28px serif'; ctx.fillText('💀',cx,y); y+=30;
+  ctx.font='bold 24px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#CC3333';
+  ctx.fillText('Game Over',cx,y); y+=28;
+
+  ctx.font='16px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#333';
+  ctx.fillText(`Score : ${score}`,cx,y); y+=22;
+  ctx.fillStyle = score>=best ? '#E67E00' : '#666';
+  ctx.fillText(`Meilleur : ${best}`,cx,y); y+=20;
+
+  if (bestDate) {
+    ctx.font='11px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#aaa';
+    ctx.fillText(bestDate,cx,y);
+  }
+  y += bestDate ? 18 : 6;
+
+  // Separator
+  ctx.strokeStyle='#e8e8e8'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(cx-140,y); ctx.lineTo(cx+140,y); ctx.stroke(); y+=16;
+
+  // Leaderboard
+  ctx.font='bold 13px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#555';
+  ctx.fillText('🏆 Top 5 du serveur',cx,y); y+=20;
+
+  if (loadingLb) {
+    ctx.font='12px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#bbb';
+    ctx.fillText('Chargement…',cx,y); y+=20*5;
+  } else if (leaderboard.length === 0) {
+    ctx.font='12px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#bbb';
+    ctx.fillText('Aucun score encore',cx,y); y+=20*5;
+  } else {
+    const medals=['🥇','🥈','🥉','4.','5.'];
+    for (let i=0; i<leaderboard.length; i++) {
+      const e = leaderboard[i];
+      const isMe = e.pseudo === pseudo;
+      ctx.fillStyle = isMe ? '#2E7D32' : '#333';
+      ctx.font = (isMe ? 'bold ' : '') + '13px "Segoe UI",Arial,sans-serif';
+      ctx.textAlign='left';  ctx.fillText(`${medals[i]} ${e.pseudo}`, cx-130, y);
+      ctx.textAlign='right'; ctx.fillText(String(e.score), cx+130, y);
+      ctx.textAlign='center';
+      y+=20;
+    }
+    y += (5-leaderboard.length)*20;
+  }
+
+  y+=4;
+  ctx.strokeStyle='#e8e8e8'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.moveTo(cx-140,y); ctx.lineTo(cx+140,y); ctx.stroke(); y+=16;
+
+  if (deathTimer>40) {
+    ctx.font='12px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#999';
+    ctx.fillText('Clic / Espace pour rejouer',cx,y);
+  }
+  ctx.restore();
+}
+
+// --- Main loop ---
+function update() {
+  if (state !== 'playing') { if (state==='dead') deathTimer++; return; }
+  frame++; vy+=GRAVITY; py+=vy;
+  if (py+PANDA_R>=FLOOR) { py=FLOOR-PANDA_R; die(); return; }
+  if (py-PANDA_R<=0)     { py=PANDA_R; die(); return; }
+  if (frame%PIPE_INTERVAL===0) spawnPipe();
+  for (let i=pipes.length-1; i>=0; i--) {
+    const p=pipes[i]; p.x-=SPEED;
+    if (!p.scored && p.x+PIPE_W<PANDA_X-PANDA_R) { p.scored=true; score++; }
+    const hit =
+      circleRect(PANDA_X,py,PANDA_R-3,p.x,0,PIPE_W,p.topH) ||
+      circleRect(PANDA_X,py,PANDA_R-3,p.x,p.topH+GAP,PIPE_W,FLOOR-(p.topH+GAP));
+    if (hit) { die(); return; }
+    if (p.x+PIPE_W<-10) pipes.splice(i,1);
+  }
+}
+
+function render() {
+  ctx.clearRect(0,0,W,H);
+  drawBackground();
+  for (const p of pipes) drawBamboo(p.x,p.topH);
+  drawPanda(PANDA_X,py,vy);
+  if (state==='idle') {
+    drawOverlay(
+      ['Floppy Panda','Clic / Espace pour démarrer'],
+      best>0 ? `Meilleur : ${best}${bestDate ? '  •  '+bestDate : ''}` : null
+    );
+  } else if (state==='dead') {
+    drawDead();
+  } else {
+    drawScore();
+  }
+}
+
+function loop() { update(); render(); requestAnimationFrame(loop); }
+loop();
+</script>
+</body>
+</html>
