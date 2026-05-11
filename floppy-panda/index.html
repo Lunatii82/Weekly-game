@@ -129,6 +129,7 @@ const PIPE_INTERVAL = 90;
 const GAP           = 160;
 const TARGET_FPS    = 60;
 const FIXED_DELTA   = 1000 / TARGET_FPS;
+const VERSION       = '1.2';
 const PIPE_W        = 52;
 const GROUND_H      = 30;
 const W             = 480;
@@ -183,6 +184,28 @@ let loadingLb    = false;
 let lastTime     = null;
 let accumulator  = 0;
 
+// --- Version check ---
+async function checkVersion() {
+  const stored = localStorage.getItem('flappypanda_version');
+  if (stored !== VERSION) {
+    best = 0; bestDate = '';
+    localStorage.setItem('flappypanda_best', '0');
+    localStorage.removeItem('flappypanda_best_date');
+    try {
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=neq.${VERSION}`,
+        { method: 'DELETE', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'return=minimal' } }
+      );
+      await fetch(
+        `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=is.null`,
+        { method: 'DELETE', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'return=minimal' } }
+      );
+    } catch(_) {}
+    localStorage.setItem('flappypanda_version', VERSION);
+  }
+}
+checkVersion();
+
 function initClouds() {
   clouds = [
     { x: 60,  y: 60,  rx: 38, ry: 18, a: 0.55 },
@@ -205,7 +228,7 @@ async function sendScore(p, s) {
         'Content-Type': 'application/json',
         'Prefer': 'resolution=merge-duplicates'
       },
-      body: JSON.stringify({ jeu: 'floppy-panda', pseudo: p, score: s })
+      body: JSON.stringify({ jeu: 'floppy-panda', pseudo: p, score: s, version: VERSION })
     });
   } catch(_) {}
 }
