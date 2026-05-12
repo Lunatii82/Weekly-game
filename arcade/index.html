@@ -124,6 +124,7 @@
 <script>
 const SUPABASE_URL = 'https://rqybsymsxjhblpmwwkod.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_Kzg89oIvbVe3VKbV9efA6g_Ip-4mFuH';
+const VERSION      = 'v' + new Date().toISOString().slice(0, 10);
 
 const myPseudo = localStorage.getItem('flappypanda_pseudo') || '';
 
@@ -150,7 +151,7 @@ function renderLeaderboard(game, rows) {
   const body = document.getElementById('lb-body-' + game);
   if (!rows || rows.length === 0) {
     body.className = 'lb-empty';
-    body.textContent = 'Aucun score enregistré. Soyez le premier ! 🎮';
+    body.textContent = 'Aucun score aujourd\'hui. Soyez le premier ! 🎮';
     return;
   }
   body.className = '';
@@ -173,7 +174,7 @@ function escHtml(str) {
 async function loadLeaderboard(game, limit = 10) {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.${game}&order=score.desc&limit=${limit}&select=pseudo,score`,
+      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.${game}&version=eq.${VERSION}&order=score.desc&limit=${limit}&select=pseudo,score`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     if (!res.ok) throw new Error();
@@ -191,14 +192,13 @@ async function loadLeaderboard(game, limit = 10) {
 async function loadFeaturedStats() {
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&order=score.desc&limit=100&select=pseudo,score`,
+      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=eq.${VERSION}&order=score.desc&limit=100&select=pseudo,score`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     if (!res.ok) return;
     const data = await res.json();
     if (data.length === 0) return;
 
-    // Unique players
     const uniquePlayers = new Set(data.map(r => r.pseudo)).size;
     document.getElementById('feat-players').textContent = uniquePlayers;
     document.getElementById('feat-topscore').textContent = data[0].score;
