@@ -187,22 +187,21 @@ let accumulator  = 0;
 // --- Version check ---
 async function checkVersion() {
   const stored = localStorage.getItem('flappypanda_version');
-  if (stored !== VERSION) {
-    best = 0; bestDate = '';
-    localStorage.setItem('flappypanda_best', '0');
-    localStorage.removeItem('flappypanda_best_date');
-    try {
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=neq.${VERSION}`,
-        { method: 'DELETE', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'return=minimal' } }
-      );
-      await fetch(
-        `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=is.null`,
-        { method: 'DELETE', headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'return=minimal' } }
-      );
-    } catch(_) {}
-    localStorage.setItem('flappypanda_version', VERSION);
-  }
+  if (stored === VERSION) return;
+  // Reset local best immédiatement
+  best = 0; bestDate = '';
+  localStorage.setItem('flappypanda_best', '0');
+  localStorage.removeItem('flappypanda_best_date');
+  // Supprime tous les scores Supabase qui ne sont pas de la version actuelle
+  const headers = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}`, 'Prefer': 'return=minimal' };
+  try {
+    await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=neq.${VERSION}`, { method: 'DELETE', headers }),
+      fetch(`${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=is.null`,        { method: 'DELETE', headers }),
+    ]);
+  } catch(_) {}
+  // Sauvegarde la version seulement après la suppression
+  localStorage.setItem('flappypanda_version', VERSION);
 }
 checkVersion();
 
@@ -238,7 +237,7 @@ async function fetchLeaderboard() {
   leaderboard = [];
   try {
     const res = await fetch(
-      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&order=score.desc&limit=5&select=pseudo,score`,
+      `${SUPABASE_URL}/rest/v1/scores?jeu=eq.floppy-panda&version=eq.${VERSION}&order=score.desc&limit=5&select=pseudo,score`,
       { headers: { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` } }
     );
     if (res.ok) leaderboard = await res.json();
