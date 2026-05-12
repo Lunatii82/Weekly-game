@@ -96,10 +96,15 @@
     transition: color 0.2s;
   }
   #back-link:hover { color: rgba(255,255,255,0.8); }
-  #mute-btn {
+  #vol-widget {
     position: absolute;
     top: 10px; right: 10px;
     z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  #vol-icon {
     background: rgba(0,0,0,0.4);
     border: none;
     color: #fff;
@@ -112,8 +117,22 @@
     align-items: center;
     justify-content: center;
     padding: 0;
+    flex-shrink: 0;
   }
-  #mute-btn:hover { background: rgba(0,0,0,0.65); }
+  #vol-icon:hover { background: rgba(0,0,0,0.65); }
+  #vol-slider-wrap {
+    display: none;
+    align-items: center;
+    background: rgba(0,0,0,0.5);
+    border-radius: 10px;
+    padding: 4px 10px;
+  }
+  #vol-slider-wrap.open { display: flex; }
+  #vol-slider {
+    width: 80px;
+    cursor: pointer;
+    accent-color: #4CAF50;
+  }
 </style>
 </head>
 <body>
@@ -128,7 +147,12 @@
     </div>
   </div>
   <canvas id="c" width="480" height="520"></canvas>
-  <button id="mute-btn" title="Activer / couper le son">🔊</button>
+  <div id="vol-widget">
+    <div id="vol-slider-wrap">
+      <input type="range" id="vol-slider" min="0" max="100" value="60">
+    </div>
+    <button id="vol-icon" title="Volume">🔊</button>
+  </div>
   <button id="change-pseudo">✏️ changer de pseudo</button>
 </div>
 <a id="back-link" href="../arcade/">← Lunatii Arcade</a>
@@ -141,11 +165,13 @@ const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 
 // --- Physics ---
-const GRAVITY       = 0.30;
-const JUMP          = -5.0;
-const SPEED         = 5.5;
-const PIPE_INTERVAL = 50;
-const GAP           = 110;
+window.GRAVITY       = 0.5;
+window.JUMP          = -7;
+window.SPEED         = 5.5;
+window.SPEED_MAX     = 9.0;
+window.SPEED_INC     = 0.05;
+window.PIPE_INTERVAL = 55;
+window.GAP           = 110;
 const TARGET_FPS    = 60;
 const FIXED_DELTA   = 1000 / TARGET_FPS;
 const VERSION       = 'v1.0';
@@ -162,10 +188,8 @@ const Audio = (() => {
   const SCALE  = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99, 880.00];
   const MELODY = [0, 2, 4, 5, 4, 2, 0, 2, 4, 7, 5, 4, 2, 4, 5, 2];
   const BASS   = [0, 0, 0, 0, 2, 2, 2, 2];
-  const MASTER_VOL = 0.35;
-
   let ctx = null, masterGain = null;
-  let muted = localStorage.getItem('flappypanda_muted') === '1';
+  let volume = parseInt(localStorage.getItem('flappypanda_volume') || '60');
   let musicRunning = false;
   let nextNoteTime = 0;
   let step = 0;
@@ -178,7 +202,7 @@ const Audio = (() => {
     if (!AC) return;
     ctx = new AC();
     masterGain = ctx.createGain();
-    masterGain.gain.value = muted ? 0 : 1;
+    masterGain.gain.value = volume / 100 * 0.35;
     masterGain.connect(ctx.destination);
   }
 
@@ -249,11 +273,11 @@ const Audio = (() => {
     const beat = 60 / bpm;
     while (nextNoteTime < ctx.currentTime + 0.4) {
       const m = MELODY[step % MELODY.length];
-      flute(SCALE[m], nextNoteTime, beat * 0.9, MASTER_VOL * 0.5);
+      flute(SCALE[m], nextNoteTime, beat * 0.9, 0.5);
       // Bass every 4 half-beats = every 2 beats
       if (step % 4 === 0) {
         const b = BASS[(step / 4) % BASS.length];
-        note(SCALE[b] / 2, nextNoteTime, beat * 1.8, MASTER_VOL * 0.3, 'triangle', 0, 1200);
+        note(SCALE[b] / 2, nextNoteTime, beat * 1.8, 0.3, 'triangle', 0, 1200);
       }
       nextNoteTime += beat / 2;
       step++;
@@ -296,25 +320,46 @@ const Audio = (() => {
     note( 80, t + 0.5, 1.0, 0.10, 'sine');
   }
 
-  function toggleMute() {
-    muted = !muted;
-    localStorage.setItem('flappypanda_muted', muted ? '1' : '0');
-    if (masterGain) masterGain.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.05);
-    return muted;
+  function setVolume(v) {
+    volume = v;
+    if (masterGain && ctx) {
+      masterGain.gain.setTargetAtTime(v / 100 * 0.35, ctx.currentTime, 0.05);
+    }
   }
-  function isMuted() { return muted; }
   function setScoreGetter(fn) { getScore = fn; }
 
-  return { startMusic, stopMusic, playJump, playScore, playDie, toggleMute, isMuted, setScoreGetter };
+  return { startMusic, stopMusic, playJump, playScore, playDie, setVolume, setScoreGetter };
 })();
 
-// Mute button setup
-const muteBtn = document.getElementById('mute-btn');
-muteBtn.textContent = Audio.isMuted() ? '🔇' : '🔊';
-muteBtn.addEventListener('click', () => {
-  const m = Audio.toggleMute();
-  muteBtn.textContent = m ? '🔇' : '🔊';
+// Volume widget setup
+const volWidget     = document.getElementById('vol-widget');
+const volIcon       = document.getElementById('vol-icon');
+const volSliderWrap = document.getElementById('vol-slider-wrap');
+const volSlider     = document.getElementById('vol-slider');
+
+// Restore saved volume
+const savedVol = parseInt(localStorage.getItem('flappypanda_volume') || '60');
+volSlider.value = savedVol;
+volIcon.textContent = savedVol === 0 ? '🔇' : '🔊';
+
+// Toggle slider visibility
+volIcon.addEventListener('click', e => {
+  e.stopPropagation();
+  volSliderWrap.classList.toggle('open');
 });
+
+// Slider change → masterGain + localStorage
+volSlider.addEventListener('input', e => {
+  e.stopPropagation();
+  const v = parseInt(volSlider.value);
+  localStorage.setItem('flappypanda_volume', v);
+  volIcon.textContent = v === 0 ? '🔇' : '🔊';
+  Audio.setVolume(v);
+});
+
+// Prevent any click/touch on the widget from triggering a jump
+volWidget.addEventListener('mousedown',  e => e.stopPropagation());
+volWidget.addEventListener('touchstart', e => e.stopPropagation(), { passive: false });
 
 // --- Pseudo ---
 let pseudo = localStorage.getItem('flappypanda_pseudo') || '';
@@ -348,7 +393,7 @@ changePseudo.addEventListener('click', () => showPseudoScreen());
 
 // --- State ---
 let state      = 'idle';
-let score      = 0;
+window.score = 0;
 let best       = parseInt(localStorage.getItem('flappypanda_best') || '0');
 let bestDate   = localStorage.getItem('flappypanda_best_date') || '';
 let vy         = 0;
@@ -361,7 +406,7 @@ let leaderboard  = [];
 let loadingLb    = false;
 let lastTime     = null;
 let accumulator  = 0;
-Audio.setScoreGetter(() => score);
+Audio.setScoreGetter(() => window.score);
 
 // --- Version check ---
 (function checkVersion() {
@@ -418,7 +463,7 @@ function jump() {
   if (pseudoScreen.style.display !== 'none') return;
   if (state === 'idle')   { startGame(); return; }
   if (state === 'dead')   { if (deathTimer > 40) resetGame(); return; }
-  if (state === 'playing') { vy = JUMP; Audio.playJump(); }
+  if (state === 'playing') { vy = window.JUMP; Audio.playJump(); }
 }
 
 document.addEventListener('keydown', e => {
@@ -429,13 +474,13 @@ canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { pa
 
 // --- Game control ---
 function startGame() {
-  state = 'playing'; score = 0; frame = 0; pipes = [];
-  vy = JUMP; py = H / 2 - 20;
+  state = 'playing'; if (!window.debugScoreOverride) window.score = 0; frame = 0; pipes = [];
+  vy = window.JUMP; py = H / 2 - 20;
   Audio.startMusic(); Audio.playJump();
 }
 
 function resetGame() {
-  state = 'idle'; score = 0; frame = 0; pipes = [];
+  state = 'idle'; window.score = 0; frame = 0; pipes = [];
   vy = 0; py = H / 2 - 20; deathTimer = 0; leaderboard = [];
 }
 
@@ -444,8 +489,8 @@ function die() {
   state = 'dead';
   deathTimer = 0;
   Audio.stopMusic(); Audio.playDie();
-  if (score > best) {
-    best = score;
+  if (window.score > best) {
+    best = window.score;
     const now = new Date();
     bestDate = `${String(now.getDate()).padStart(2,'0')}/${String(now.getMonth()+1).padStart(2,'0')}/${now.getFullYear()}`;
     localStorage.setItem('flappypanda_best', best);
@@ -458,7 +503,7 @@ function die() {
 // --- Pipes ---
 function spawnPipe() {
   const minTop = 60;
-  const maxTop = FLOOR - GAP - 60;
+  const maxTop = FLOOR - window.GAP - 60;
   const topH   = minTop + Math.random() * (maxTop - minTop);
   pipes.push({ x: W + PIPE_W, topH, scored: false });
 }
@@ -500,7 +545,7 @@ function drawBackground() {
 }
 
 function drawBamboo(x, topH) {
-  const botY = topH + GAP;
+  const botY = topH + window.GAP;
   const botH = FLOOR - botY;
 
   function drawStem(sx, sy, sw, sh) {
@@ -586,7 +631,7 @@ function drawPanda(px_, py_, vy_) {
 }
 
 function drawScore() {
-  const txt = String(score);
+  const txt = String(window.score);
   ctx.save();
   const pad=14, w=Math.max(60, txt.length*22+pad*2), x=W/2-w/2;
   ctx.fillStyle='rgba(255,255,255,0.75)';
@@ -630,8 +675,8 @@ function drawDead() {
   ctx.fillText('Game Over',cx,y); y+=28;
 
   ctx.font='16px "Segoe UI",Arial,sans-serif'; ctx.fillStyle='#333';
-  ctx.fillText(`Score : ${score}`,cx,y); y+=22;
-  ctx.fillStyle = score>=best ? '#E67E00' : '#666';
+  ctx.fillText(`Score : ${window.score}`,cx,y); y+=22;
+  ctx.fillStyle = window.score>=best ? '#E67E00' : '#666';
   ctx.fillText(`Meilleur : ${best}`,cx,y); y+=20;
 
   if (bestDate) {
@@ -683,16 +728,18 @@ function drawDead() {
 // --- Main loop ---
 function update() {
   if (state !== 'playing') { if (state==='dead') deathTimer++; return; }
-  frame++; vy+=GRAVITY; py+=vy;
+  frame++; vy+=window.GRAVITY; py+=vy;
   if (py+PANDA_R>=FLOOR) { py=FLOOR-PANDA_R; die(); return; }
   if (py-PANDA_R<=0)     { py=PANDA_R; die(); return; }
-  if (frame%PIPE_INTERVAL===0) spawnPipe();
+  const currentSpeed = Math.min(window.SPEED + window.score * window.SPEED_INC, window.SPEED_MAX);
+  const dynamicInterval = Math.round(window.PIPE_INTERVAL * (window.SPEED / currentSpeed));
+  if (frame % dynamicInterval === 0) spawnPipe();
   for (let i=pipes.length-1; i>=0; i--) {
-    const p=pipes[i]; p.x-=SPEED;
-    if (!p.scored && p.x+PIPE_W<PANDA_X-PANDA_R) { p.scored=true; score++; Audio.playScore(); }
+    const p=pipes[i]; p.x-=currentSpeed;
+    if (!p.scored && p.x+PIPE_W<PANDA_X-PANDA_R) { p.scored=true; window.score++; Audio.playScore(); }
     const hit =
       circleRect(PANDA_X,py,PANDA_R-3,p.x,0,PIPE_W,p.topH) ||
-      circleRect(PANDA_X,py,PANDA_R-3,p.x,p.topH+GAP,PIPE_W,FLOOR-(p.topH+GAP));
+      circleRect(PANDA_X,py,PANDA_R-3,p.x,p.topH+window.GAP,PIPE_W,FLOOR-(p.topH+window.GAP));
     if (hit) { die(); return; }
     if (p.x+PIPE_W<-10) pipes.splice(i,1);
   }
@@ -735,5 +782,6 @@ function loop(timestamp) {
 }
 requestAnimationFrame(loop);
 </script>
+<script src="debug.js"></script>
 </body>
 </html>
