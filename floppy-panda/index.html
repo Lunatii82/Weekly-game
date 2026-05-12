@@ -400,6 +400,7 @@ let vy         = 0;
 let py         = H / 2 - 20;
 let pipes      = [];
 let frame      = 0;
+let nextPipe   = 55;
 let clouds     = [];
 let deathTimer = 0;
 let leaderboard  = [];
@@ -474,7 +475,7 @@ canvas.addEventListener('touchstart', e => { e.preventDefault(); jump(); }, { pa
 
 // --- Game control ---
 function startGame() {
-  state = 'playing'; if (!window.debugScoreOverride) window.score = 0; frame = 0; pipes = [];
+  state = 'playing'; if (!window.debugScoreOverride) window.score = 0; frame = 0; pipes = []; nextPipe = window.PIPE_INTERVAL;
   vy = window.JUMP; py = H / 2 - 20;
   Audio.startMusic(); Audio.playJump();
 }
@@ -732,8 +733,11 @@ function update() {
   if (py+PANDA_R>=FLOOR) { py=FLOOR-PANDA_R; die(); return; }
   if (py-PANDA_R<=0)     { py=PANDA_R; die(); return; }
   const currentSpeed = Math.min(window.SPEED + window.score * window.SPEED_INC, window.SPEED_MAX);
-  const dynamicInterval = Math.round(window.PIPE_INTERVAL * (window.SPEED / currentSpeed));
-  if (frame % dynamicInterval === 0) spawnPipe();
+  if (frame >= nextPipe) {
+    spawnPipe();
+    const dynamicInterval = Math.round(window.PIPE_INTERVAL * (window.SPEED / currentSpeed));
+    nextPipe = frame + dynamicInterval;
+  }
   for (let i=pipes.length-1; i>=0; i--) {
     const p=pipes[i]; p.x-=currentSpeed;
     if (!p.scored && p.x+PIPE_W<PANDA_X-PANDA_R) { p.scored=true; window.score++; Audio.playScore(); }
