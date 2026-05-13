@@ -1,0 +1,1278 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Business Tour 🐼</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ===== Accueil ===== -->
+<div id="screen-home" class="screen active">
+  <div class="panda-card">
+    <div class="card-icon">🐼</div>
+    <h1 class="card-title">Business Tour</h1>
+    <p class="card-sub">Multijoueur en ligne · 2 à 4 joueurs · Plateau panda</p>
+    <input type="text" id="inp-pseudo" class="panda-input" placeholder="Ton pseudo" maxlength="20" autocomplete="off">
+    <div class="color-picker" id="color-picker">
+      <div class="color-dot selected" data-c="p1">🐼</div>
+      <div class="color-dot" data-c="p2">🐼</div>
+      <div class="color-dot" data-c="p3">🐼</div>
+      <div class="color-dot" data-c="p4">🐼</div>
+    </div>
+    <div class="home-actions">
+      <button id="btn-create" class="btn-green">🎲 Créer une partie</button>
+      <button id="btn-join-toggle" class="btn-outline">🔗 Rejoindre une partie</button>
+    </div>
+    <div id="join-panel" class="join-panel hidden">
+      <input type="text" id="inp-code" class="panda-input code-input" placeholder="CODE" maxlength="4" autocomplete="off">
+      <button id="btn-join" class="btn-green" style="width:auto;padding:11px 18px;">→</button>
+    </div>
+    <p id="home-error" class="error-msg"></p>
+    <a href="../arcade/" class="back-link">← Lunatii Arcade</a>
+  </div>
+</div>
+
+<!-- ===== Lobby ===== -->
+<div id="screen-lobby" class="screen">
+  <div class="panda-card">
+    <div class="card-icon">🐼</div>
+    <h2 class="card-title" style="font-size:1.7rem">Salle d'attente</h2>
+    <div class="code-badge">Code&nbsp;: <strong id="lob-code">----</strong></div>
+    <p class="card-sub" style="margin-top:6px">Partagez ce code (2 à 4 joueurs)</p>
+    <div id="lob-players" class="player-list"></div>
+    <button id="btn-start" class="btn-green hidden">▶ Lancer la partie</button>
+    <p id="lob-hint" class="hint-text">En attente de joueurs... (min. 2)</p>
+    <button id="btn-leave" class="btn-link" style="margin-top:14px">← Quitter</button>
+  </div>
+</div>
+
+<!-- ===== Jeu ===== -->
+<div id="screen-game" class="screen">
+  <div class="game-topbar">
+    <a href="../arcade/" class="topbar-back" title="Arcade">🐼</a>
+    <span id="g-turn" class="turn-text">—</span>
+    <span id="g-timer" class="timer-text">30:00</span>
+  </div>
+  <div class="game-main">
+    <div class="board-wrap">
+      <div id="board" class="board"></div>
+    </div>
+    <div id="right-panel" class="right-panel"></div>
+  </div>
+</div>
+
+<!-- ===== Fin ===== -->
+<div id="screen-end" class="screen">
+  <div class="panda-card">
+    <div class="card-icon">🏆</div>
+    <h2 class="card-title">Partie terminée !</h2>
+    <p class="card-sub">Classement final</p>
+    <div id="end-podium" class="podium"></div>
+    <button id="btn-replay" class="btn-green" style="margin-top:16px">🎲 Nouvelle partie</button>
+    <a href="../arcade/" class="back-link">← Lunatii Arcade</a>
+  </div>
+</div>
+
+<!-- ===== Modal ===== -->
+<div id="modal-bg" class="modal-bg hidden">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+/*
+  TABLE SUPABASE REQUISE — exécuter dans le SQL Editor de Supabase :
+
+  CREATE TABLE business_rooms (
+    id text PRIMARY KEY,
+    state jsonb NOT NULL,
+    updated_at timestamptz DEFAULT now()
+  );
+  ALTER TABLE business_rooms ENABLE ROW LEVEL SECURITY;
+  CREATE POLICY "public access" ON business_rooms FOR ALL USING (true) WITH CHECK (true);
+*/
+
+const SUPABASE_URL = 'https://rqybsymsxjhblpmwwkod.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_Kzg89oIvbVe3VKbV9efA6g_Ip-4mFuH';
+
+// ===== Données du plateau (40 cases) =====
+// rents = [base, monopoly(2× base), 1 maison, 2, 3, 4, hôtel]
+const TILES = [
+  { i:0,  type:'corner-go',     name:'Départ',                   icon:'🐼' },
+  { i:1,  type:'property', name:'Forêt de Bambou',          color:'violet',    price:60,  rents:[2,4,10,30,90,160,250],         houseCost:50 },
+  { i:2,  type:'caisse',   name:'Caisse Panda',              icon:'📦' },
+  { i:3,  type:'property', name:'Vallée du Bambou',         color:'violet',    price:60,  rents:[4,8,20,60,180,320,450],        houseCost:50 },
+  { i:4,  type:'tax',      name:'Impôt Bambou',             icon:'💸',         amount:200 },
+  { i:5,  type:'station',  name:'Gare du Bambou Express',   icon:'🚂' },
+  { i:6,  type:'property', name:'Bambouseraie Aurore',      color:'lightblue', price:100, rents:[6,12,30,90,270,400,550],       houseCost:50 },
+  { i:7,  type:'carte',    name:'Carte Bambou',              icon:'🎴' },
+  { i:8,  type:'property', name:'Sentier des Pousses',      color:'lightblue', price:100, rents:[6,12,30,90,270,400,550],       houseCost:50 },
+  { i:9,  type:'property', name:'Bois des Sages',           color:'lightblue', price:120, rents:[8,16,40,100,300,450,600],      houseCost:50 },
+  { i:10, type:'corner-jail', name:'Zoo (Visite)',           icon:'🔒' },
+  { i:11, type:'property', name:'Montagne Panda',           color:'pink',      price:140, rents:[10,20,50,150,450,625,750],     houseCost:100 },
+  { i:12, type:'company',  name:'Bamboo Electric',           icon:'⚡' },
+  { i:13, type:'property', name:'Cascade Sereine',          color:'pink',      price:140, rents:[10,20,50,150,450,625,750],     houseCost:100 },
+  { i:14, type:'property', name:'Pic des Pandas',           color:'pink',      price:160, rents:[12,24,60,180,500,700,900],     houseCost:100 },
+  { i:15, type:'station',  name:'Gare des Bambous Noirs',   icon:'🚂' },
+  { i:16, type:'property', name:'Marché aux Pousses',       color:'orange',    price:180, rents:[14,28,70,200,550,750,950],     houseCost:100 },
+  { i:17, type:'caisse',   name:'Caisse Panda',              icon:'📦' },
+  { i:18, type:'property', name:'Place du Wok',             color:'orange',    price:180, rents:[14,28,70,200,550,750,950],     houseCost:100 },
+  { i:19, type:'property', name:'Avenue du Bambou Doré',    color:'orange',    price:200, rents:[16,32,80,220,600,800,1000],    houseCost:100 },
+  { i:20, type:'corner-parking', name:'Bambouseraie',        icon:'🌿' },
+  { i:21, type:'property', name:'Réserve Naturelle',        color:'red',       price:220, rents:[18,36,90,250,700,875,1050],    houseCost:150 },
+  { i:22, type:'carte',    name:'Carte Bambou',              icon:'🎴' },
+  { i:23, type:'property', name:'Sanctuaire Panda',         color:'red',       price:220, rents:[18,36,90,250,700,875,1050],    houseCost:150 },
+  { i:24, type:'property', name:'Jardin Impérial',          color:'red',       price:240, rents:[20,40,100,300,750,925,1100],   houseCost:150 },
+  { i:25, type:'station',  name:'Gare du Grand Bambou',     icon:'🚂' },
+  { i:26, type:'property', name:'Temple du Bambou',         color:'yellow',    price:260, rents:[22,44,110,330,800,975,1150],   houseCost:150 },
+  { i:27, type:'property', name:'Pagode Dorée',             color:'yellow',    price:260, rents:[22,44,110,330,800,975,1150],   houseCost:150 },
+  { i:28, type:'company',  name:'Aqua Panda',                icon:'💧' },
+  { i:29, type:'property', name:'Place du Soleil',          color:'yellow',    price:280, rents:[24,48,120,360,850,1025,1200],  houseCost:150 },
+  { i:30, type:'corner-gojail', name:'Aller au Zoo',          icon:'🚓' },
+  { i:31, type:'property', name:'Forêt Émeraude',           color:'green',     price:300, rents:[26,52,130,390,900,1100,1275],  houseCost:200 },
+  { i:32, type:'property', name:'Vallée Verdoyante',        color:'green',     price:300, rents:[26,52,130,390,900,1100,1275],  houseCost:200 },
+  { i:33, type:'caisse',   name:'Caisse Panda',              icon:'📦' },
+  { i:34, type:'property', name:'Grand Bambou',             color:'green',     price:320, rents:[28,56,150,450,1000,1200,1400], houseCost:200 },
+  { i:35, type:'station',  name:'Gare du Panda Express',    icon:'🚂' },
+  { i:36, type:'carte',    name:'Carte Bambou',              icon:'🎴' },
+  { i:37, type:'property', name:'Avenue Impériale',         color:'darkblue',  price:350, rents:[35,70,175,500,1100,1300,1500], houseCost:200 },
+  { i:38, type:'tax',      name:'Impôt de Luxe',            icon:'💎',         amount:100 },
+  { i:39, type:'property', name:'Couronne du Panda',        color:'darkblue',  price:400, rents:[50,100,200,600,1400,1700,2000],houseCost:200 },
+];
+
+const COLOR_GROUPS = {
+  violet:    [1,3],
+  lightblue: [6,8,9],
+  pink:      [11,13,14],
+  orange:    [16,18,19],
+  red:       [21,23,24],
+  yellow:    [26,27,29],
+  green:     [31,32,34],
+  darkblue:  [37,39],
+};
+const STATION_IDX = [5,15,25,35];
+const COMPANY_IDX = [12,28];
+
+// ===== Cartes (Bambou + Caisse) =====
+const CARTES_BAMBOU = [
+  { msg:'Pousse de printemps : tu gagnes 50 🪙', effect:{type:'money', amount:50} },
+  { msg:'Pluie de bambou abondante : +100 🪙', effect:{type:'money', amount:100} },
+  { msg:'Fête au village : tu offres 30 🪙', effect:{type:'money', amount:-30} },
+  { msg:'Tu te perds dans la forêt : recule de 3 cases', effect:{type:'moveDelta', delta:-3} },
+  { msg:'Train express : direction la prochaine gare !', effect:{type:'moveTo', kind:'station'} },
+  { msg:'Course folle : retour au Départ 🐼 (+200 🪙)', effect:{type:'moveTo', target:0} },
+  { msg:'Évasion ratée : direct au Zoo !', effect:{type:'jail'} },
+  { msg:'Don bambou : +25 🪙', effect:{type:'money', amount:25} },
+];
+const CAISSE_PANDA_CARDS = [
+  { msg:'Héritage de bambou : +200 🪙', effect:{type:'money', amount:200} },
+  { msg:'Visite vétérinaire : -50 🪙', effect:{type:'money', amount:-50} },
+  { msg:'Fête au village : +75 🪙', effect:{type:'money', amount:75} },
+  { msg:'Erreur comptable en ta faveur : +100 🪙', effect:{type:'money', amount:100} },
+  { msg:'Anniversaire panda : chaque joueur t\'offre 20 🪙', effect:{type:'collectAll', amount:20} },
+  { msg:'Direction le Zoo !', effect:{type:'jail'} },
+  { msg:'Soin médical : -150 🪙', effect:{type:'money', amount:-150} },
+  { msg:'Concours du panda le plus mignon : +50 🪙', effect:{type:'money', amount:50} },
+];
+
+const START_MONEY = 1500;
+const GO_BONUS = 200;
+const JAIL_FINE = 50;
+const JAIL_IDX = 10;
+const GOJAIL_IDX = 30;
+const STATION_RENTS = [25,50,100,200];
+const GAME_DURATION_MS = 30 * 60 * 1000;
+
+// ===== Identité joueur =====
+let myId = localStorage.getItem('business_pid') || (()=>{
+  const id = typeof crypto!=='undefined'&&crypto.randomUUID
+    ? crypto.randomUUID()
+    : Date.now().toString(36)+Math.random().toString(36).slice(2);
+  localStorage.setItem('business_pid', id);
+  return id;
+})();
+let myName = '';
+let myColor = 'p1';
+let roomId  = '';
+let gs      = null; // game state (local copy)
+let pollTmr = null;
+let timerTmr = null;
+let rolling  = false;
+let dieAnimTmr = null;
+
+// ===== Helpers Supabase =====
+async function sfetch(method, path, body){
+  const h = { 'apikey':SUPABASE_KEY, 'Authorization':'Bearer '+SUPABASE_KEY, 'Content-Type':'application/json' };
+  if (method==='POST') h['Prefer']='resolution=merge-duplicates';
+  const opts = {method, headers:h};
+  if (body!==undefined) opts.body = JSON.stringify(body);
+  try {
+    const r = await fetch(SUPABASE_URL+path, opts);
+    if (!r.ok){ console.error('SB',r.status,await r.text()); return null; }
+    const t = await r.text();
+    return t ? JSON.parse(t) : true;
+  } catch(e){ console.error(e); return null; }
+}
+async function getRoom(id){
+  const d = await sfetch('GET',`/rest/v1/business_rooms?id=eq.${id}&select=state`);
+  return d&&d[0] ? d[0].state : null;
+}
+async function saveRoom(state){
+  return sfetch('PATCH',`/rest/v1/business_rooms?id=eq.${roomId}`,{state,updated_at:new Date().toISOString()});
+}
+
+// ===== Polling =====
+function startPoll(){
+  stopPoll();
+  pollTmr = setInterval(async()=>{
+    if (rolling) return; // ne pas écraser pendant l'anim locale
+    const ns = await getRoom(roomId);
+    if (!ns) return;
+    if (JSON.stringify(ns)!==JSON.stringify(gs)){
+      gs = ns;
+      render();
+    }
+  }, 1500);
+}
+function stopPoll(){ if(pollTmr){clearInterval(pollTmr);pollTmr=null;} }
+
+// ===== Screens =====
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+// ===== Création du plateau (grille 11x11) =====
+// Cases positions: 11x11, sens horaire en partant du coin bas-droit (case 0)
+function tilePosition(i){
+  // 0..10 bottom row (right to left), 10..20 left column (bottom to top), 20..30 top row (left to right), 30..40 right column (top to bottom)
+  if (i <= 10){ return { row:11, col:11 - i }; }
+  if (i <= 20){ return { row:11 - (i - 10), col:1 }; }
+  if (i <= 30){ return { row:1, col:1 + (i - 20) }; }
+  return { row:1 + (i - 30), col:11 };
+}
+function tileSide(i){
+  if (i === 0 || i === 10 || i === 20 || i === 30) return 'corner';
+  if (i < 10) return 'bottom';
+  if (i < 20) return 'left';
+  if (i < 30) return 'top';
+  return 'right';
+}
+
+function buildBoard(){
+  const board = document.getElementById('board');
+  board.innerHTML = '';
+
+  // Centre
+  const center = document.createElement('div');
+  center.className = 'board-center';
+  center.id = 'board-center';
+  board.appendChild(center);
+
+  for (const t of TILES){
+    const pos = tilePosition(t.i);
+    const side = tileSide(t.i);
+    const el = document.createElement('div');
+    el.className = `tile tile-${t.type.replace('corner-','corner ')} side-${side}`;
+    el.style.gridRow = pos.row;
+    el.style.gridColumn = pos.col;
+    el.dataset.idx = t.i;
+
+    if (t.type === 'property'){
+      el.innerHTML = `
+        <div class="color-band ${t.color}"></div>
+        <div class="tile-name">${escapeHtml(t.name)}</div>
+        <div class="tile-price">${t.price}🪙</div>
+        <div class="houses-row" id="houses-${t.i}"></div>
+      `;
+    } else if (t.type === 'station' || t.type === 'company' || t.type === 'tax' || t.type === 'carte' || t.type === 'caisse'){
+      el.innerHTML = `
+        <div class="tile-icon">${t.icon}</div>
+        <div class="tile-name">${escapeHtml(t.name)}</div>
+        ${t.type==='tax' ? `<div class="tile-price">${t.amount}🪙</div>` : ''}
+      `;
+    } else if (t.type.startsWith('corner')){
+      el.innerHTML = `
+        <div class="corner-icon">${t.icon}</div>
+        <div class="corner-name">${escapeHtml(t.name)}</div>
+      `;
+    }
+    el.onclick = ()=>showTileInfo(t.i);
+    board.appendChild(el);
+  }
+}
+
+// ===== Rendu plateau (positions/houses/owners) =====
+function renderBoard(){
+  if (!gs) return;
+  // Reset pions
+  document.querySelectorAll('.pawn').forEach(p=>p.remove());
+  document.querySelectorAll('.owner-flag').forEach(o=>o.remove());
+
+  // Owners + houses
+  for (const tile of TILES){
+    if (tile.type !== 'property' && tile.type !== 'station' && tile.type !== 'company') continue;
+    const owner = findOwner(tile.i);
+    const el = document.querySelector(`.tile[data-idx="${tile.i}"]`);
+    if (!el) continue;
+    if (owner){
+      const flag = document.createElement('div');
+      flag.className = `owner-flag ${owner.color}`;
+      el.appendChild(flag);
+    }
+    if (tile.type === 'property'){
+      const h = gs.houses[tile.i] || 0;
+      const houseEl = document.getElementById(`houses-${tile.i}`);
+      if (houseEl){
+        if (h === 0) houseEl.innerHTML = '';
+        else if (h <= 4) houseEl.innerHTML = Array(h).fill('<span class="house">🏠</span>').join('');
+        else houseEl.innerHTML = '<span class="house">🏨</span>';
+      }
+    }
+  }
+
+  // Pions joueurs
+  for (let pi = 0; pi < gs.players.length; pi++){
+    const p = gs.players[pi];
+    if (p.bankrupt) continue;
+    const pos = tilePosition(p.position);
+    const tileEl = document.querySelector(`.tile[data-idx="${p.position}"]`);
+    if (!tileEl) continue;
+    const pawn = document.createElement('div');
+    pawn.className = `pawn ${p.color}`;
+    pawn.textContent = '🐼';
+    // Offset for multiple pawns on same tile
+    const sameCount = gs.players.filter((q,i)=>i<pi && !q.bankrupt && q.position===p.position).length;
+    const offsetX = (sameCount % 2) * 14;
+    const offsetY = Math.floor(sameCount / 2) * 14;
+    pawn.style.left = `${4 + offsetX}px`;
+    pawn.style.bottom = `${4 + offsetY}px`;
+    if (p.inJail){
+      const lock = document.createElement('span');
+      lock.className = 'jail-lock';
+      lock.textContent = '🔒';
+      pawn.appendChild(lock);
+    }
+    tileEl.appendChild(pawn);
+  }
+
+  // Centre
+  renderCenter();
+}
+
+function renderCenter(){
+  const center = document.getElementById('board-center');
+  if (!center || !gs) return;
+  const cp = gs.players[gs.currentPlayerIndex];
+  const isMyTurn = cp && cp.id === myId && !cp.bankrupt;
+  const diceTxt = gs.dice && gs.dice[0] ? `${gs.dice[0]} + ${gs.dice[1]} = ${gs.dice[0]+gs.dice[1]}` : '';
+  let actionsHtml = '';
+  if (isMyTurn && !gs.pendingAction){
+    if (gs.turnPhase === 'preRoll'){
+      if (cp.inJail){
+        actionsHtml = `
+          <button class="btn-green" onclick="payJail()">Payer 50🪙 pour sortir</button>
+          <button class="btn-outline" onclick="rollDice()">Tenter un double 🎲</button>
+        `;
+      } else {
+        const buildable = canBuildAny(cp);
+        actionsHtml = `
+          <button class="btn-green" onclick="rollDice()">Lancer les dés 🎲</button>
+          ${buildable ? '<button class="btn-outline" onclick="openBuildPanel()">🏠 Construire</button>' : ''}
+        `;
+      }
+    } else if (gs.turnPhase === 'postAction'){
+      actionsHtml = `<button class="btn-green" onclick="endTurn()">Fin du tour ✓</button>`;
+    } else if (gs.turnPhase === 'doubleAgain'){
+      actionsHtml = `<button class="btn-green" onclick="rollDice()">Relancer (double !) 🎲</button>`;
+    }
+  }
+  center.innerHTML = `
+    <div class="bc-title"><span class="emoji">🐼</span> Business Tour</div>
+    <div class="bc-turn ${isMyTurn?'my-turn':''}">${isMyTurn?"C'est ton tour !":`Tour de ${escapeHtml(cp ? cp.name : '—')}`}</div>
+    <div class="bc-dice">
+      <div class="die" id="die1">${gs.dice && gs.dice[0] ? gs.dice[0] : '–'}</div>
+      <div class="die" id="die2">${gs.dice && gs.dice[1] ? gs.dice[1] : '–'}</div>
+    </div>
+    ${diceTxt ? `<div style="font-size:12px;color:#94a3b8">${diceTxt}</div>` : ''}
+    <div class="bc-actions">${actionsHtml}</div>
+    <div class="bc-log">${(gs.log||[]).slice(-4).map(l=>`<p>${escapeHtml(l)}</p>`).join('')}</div>
+  `;
+}
+
+function renderRightPanel(){
+  const rp = document.getElementById('right-panel');
+  if (!rp || !gs) return;
+  rp.innerHTML = gs.players.map((p,i)=>{
+    const isCurr = i === gs.currentPlayerIndex && !p.bankrupt;
+    const props = p.properties.map(idx=>{
+      const t = TILES[idx];
+      let cls = '';
+      let inner = '';
+      let count = '';
+      if (t.type === 'property'){
+        cls = t.color;
+        const h = gs.houses[idx] || 0;
+        if (h > 0) count = `<span class="h-count">${h===5?'H':h}</span>`;
+      } else if (t.type === 'station'){
+        cls = 'station'; inner = '🚂';
+      } else if (t.type === 'company'){
+        cls = 'company'; inner = t.icon;
+      }
+      return `<div class="pc-prop ${cls}" title="${escapeHtml(t.name)}">${inner}${count}</div>`;
+    }).join('');
+    return `
+      <div class="player-card ${isCurr?'active':''} ${p.bankrupt?'bankrupt':''}">
+        <div class="pc-head">
+          <span class="pc-color ${p.color}"></span>
+          <span class="pc-name">${escapeHtml(p.name)}</span>
+          ${p.id===myId?'<span class="pc-me">(toi)</span>':''}
+        </div>
+        ${p.inJail?'<span class="pc-jail">🔒</span>':''}
+        <div class="pc-money">${p.money} 🪙</div>
+        <div class="pc-props">${props || '<span style="font-size:11px;color:#888">Aucune propriété</span>'}</div>
+        ${p.bankrupt?'<div style="font-size:11px;color:#888;margin-top:4px;font-style:italic">Faillite</div>':''}
+      </div>
+    `;
+  }).join('');
+}
+
+// ===== Rendu général =====
+function render(){
+  if (!gs) return;
+  switch(gs.phase){
+    case 'waiting':  renderLobby(); break;
+    case 'playing':  renderGame();  break;
+    case 'finished': renderEnd();   break;
+  }
+}
+
+function renderLobby(){
+  showScreen('screen-lobby');
+  document.getElementById('lob-code').textContent = roomId;
+  const list = document.getElementById('lob-players');
+  list.innerHTML = gs.players.map(p=>`
+    <div class="player-item ${p.id===myId?'me':''}">
+      <span class="p-dot ${p.color}"></span>
+      ${escapeHtml(p.name)} ${p.id===gs.host?'👑':''} ${p.id===myId?'<em style="font-weight:400;color:#888">(toi)</em>':''}
+    </div>`).join('');
+  const startBtn = document.getElementById('btn-start');
+  const hint = document.getElementById('lob-hint');
+  if (gs.host === myId){
+    if (gs.players.length >= 2){
+      startBtn.classList.remove('hidden');
+      hint.textContent = `${gs.players.length} joueur(s) — Prêt à lancer !`;
+    } else {
+      startBtn.classList.add('hidden');
+      hint.textContent = 'En attente d\'un autre joueur...';
+    }
+  } else {
+    startBtn.classList.add('hidden');
+    hint.textContent = 'En attente que l\'hôte lance la partie...';
+  }
+}
+
+function renderGame(){
+  showScreen('screen-game');
+  const cp = gs.players[gs.currentPlayerIndex];
+  const isMyTurn = cp && cp.id === myId && !cp.bankrupt;
+  const turnEl = document.getElementById('g-turn');
+  turnEl.textContent = isMyTurn ? "C'est ton tour 🐼" : `Tour de ${cp ? cp.name : '—'} 🐼`;
+  turnEl.className = 'turn-text' + (isMyTurn ? ' my-turn' : '');
+  updateTimer();
+
+  renderBoard();
+  renderRightPanel();
+  renderModalFromState();
+}
+
+function renderEnd(){
+  showScreen('screen-end');
+  stopPoll();
+  stopTimer();
+  const sorted = [...gs.players].sort((a,b)=>totalCapital(b) - totalCapital(a));
+  const medals = ['🥇','🥈','🥉','4.'];
+  document.getElementById('end-podium').innerHTML = sorted.map((p,i)=>`
+    <div class="podium-row ${p.id===myId?'me':''}">
+      <span class="podium-medal">${medals[i]||(i+1)+'.'}</span>
+      <span class="podium-name">${escapeHtml(p.name)} ${p.bankrupt?'(faillite)':''}</span>
+      <span class="podium-score">${totalCapital(p)} 🪙</span>
+    </div>`).join('');
+}
+
+// ===== Timer =====
+function updateTimer(){
+  if (!gs || !gs.startTime) return;
+  const elapsed = Date.now() - new Date(gs.startTime).getTime();
+  const remaining = Math.max(0, GAME_DURATION_MS - elapsed);
+  const m = Math.floor(remaining / 60000);
+  const s = Math.floor((remaining % 60000) / 1000);
+  const el = document.getElementById('g-timer');
+  if (el) el.textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  if (remaining === 0 && gs.phase === 'playing'){
+    if (gs.host === myId) timeoutEndGame();
+  }
+}
+function startTimer(){
+  stopTimer();
+  timerTmr = setInterval(updateTimer, 1000);
+}
+function stopTimer(){ if (timerTmr){ clearInterval(timerTmr); timerTmr = null; } }
+
+async function timeoutEndGame(){
+  const st = JSON.parse(JSON.stringify(gs));
+  st.phase = 'finished';
+  st.log = (st.log||[]).concat(['⏱️ Temps écoulé — classement par capital total !']);
+  await saveRoom(st);
+  gs = st; render();
+}
+
+// ===== Logique : helpers =====
+function findOwner(tileIdx){
+  for (const p of gs.players){
+    if (!p.bankrupt && p.properties.includes(tileIdx)) return p;
+  }
+  return null;
+}
+function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function totalCapital(p){
+  let total = p.money;
+  for (const idx of p.properties){
+    const t = TILES[idx];
+    if (t.type === 'property'){
+      total += t.price;
+      const h = (gs.houses && gs.houses[idx]) || 0;
+      total += h * t.houseCost;
+    } else {
+      total += 200; // gare/compagnie valeur
+    }
+  }
+  return total;
+}
+function getRent(state, tileIdx, dice){
+  const t = TILES[tileIdx];
+  const owner = state.players.find(p=>!p.bankrupt && p.properties.includes(tileIdx));
+  if (!owner) return 0;
+  if (t.type === 'property'){
+    const h = (state.houses && state.houses[tileIdx]) || 0;
+    if (h > 0){
+      return t.rents[1 + h]; // rents[2..6] for 1..5 houses
+    }
+    // Pas de maisons : monopoly = 2× base si possède tout le groupe
+    const groupIdxs = COLOR_GROUPS[t.color];
+    const ownsAll = groupIdxs.every(idx => owner.properties.includes(idx));
+    return ownsAll ? t.rents[1] : t.rents[0];
+  }
+  if (t.type === 'station'){
+    const ownCount = STATION_IDX.filter(idx => owner.properties.includes(idx)).length;
+    return STATION_RENTS[ownCount - 1] || 0;
+  }
+  if (t.type === 'company'){
+    const ownCount = COMPANY_IDX.filter(idx => owner.properties.includes(idx)).length;
+    const mul = ownCount === 2 ? 10 : 4;
+    return mul * (dice[0] + dice[1]);
+  }
+  return 0;
+}
+function canBuildAny(player){
+  for (const color in COLOR_GROUPS){
+    const idxs = COLOR_GROUPS[color];
+    if (!idxs.every(i => player.properties.includes(i))) continue;
+    // tous les niveaux doivent être inférieurs à 5 et il faut équilibrer (max 1 d'écart)
+    const counts = idxs.map(i => (gs.houses[i] || 0));
+    const minH = Math.min(...counts);
+    if (minH >= 5) continue;
+    const t = TILES[idxs[0]];
+    if (player.money < t.houseCost) continue;
+    return true;
+  }
+  return false;
+}
+function pickColor(state){
+  const taken = new Set(state.players.map(p=>p.color));
+  for (const c of ['p1','p2','p3','p4']){
+    if (!taken.has(c)) return c;
+  }
+  return 'p1';
+}
+
+// ===== Modals =====
+function showModal(html){
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-bg').classList.remove('hidden');
+}
+function hideModal(){
+  document.getElementById('modal-bg').classList.add('hidden');
+}
+
+function renderModalFromState(){
+  if (!gs || !gs.pendingAction){ hideModal(); return; }
+  const pa = gs.pendingAction;
+  const cp = gs.players[gs.currentPlayerIndex];
+  const isMine = cp.id === myId;
+
+  if (pa.type === 'buy'){
+    const t = TILES[pa.tileIdx];
+    const colorBand = t.type === 'property'
+      ? `<div style="width:40px;height:8px;border-radius:4px;background:var(--c-${t.color});margin:0 auto 8px"></div>` : '';
+    showModal(`
+      <div class="modal-icon">${t.icon || '🏞️'}</div>
+      <div class="modal-title">${escapeHtml(t.name)}</div>
+      ${colorBand}
+      <div class="modal-text">
+        Cette propriété est libre !<br>
+        Prix d'achat : <strong>${t.price} 🪙</strong>
+        ${t.type==='property' ? `<br><span style="font-size:11px;color:#888">Loyer de base : ${t.rents[0]} 🪙</span>` : ''}
+      </div>
+      <div class="modal-actions">
+        ${isMine ? `
+          <button class="btn-green" onclick="actionBuy()" ${cp.money < t.price ? 'disabled' : ''}>Acheter</button>
+          <button class="btn-grey" onclick="actionSkipBuy()">Passer</button>
+        ` : `<div class="modal-wait">${escapeHtml(cp.name)} réfléchit...</div>`}
+      </div>
+    `);
+  } else if (pa.type === 'rent'){
+    const t = TILES[pa.tileIdx];
+    const owner = gs.players.find(p=>!p.bankrupt && p.properties.includes(pa.tileIdx));
+    showModal(`
+      <div class="modal-icon">💰</div>
+      <div class="modal-title">${escapeHtml(t.name)}</div>
+      <div class="modal-text">
+        Tu dois <strong>${pa.amount} 🪙</strong> de loyer à <strong>${escapeHtml(owner.name)} 🐼</strong>
+      </div>
+      <div class="modal-actions">
+        ${isMine ? `<button class="btn-green" onclick="actionPayRent()">Payer ${pa.amount} 🪙</button>` : `<div class="modal-wait">${escapeHtml(cp.name)} doit payer...</div>`}
+      </div>
+    `);
+  } else if (pa.type === 'tax'){
+    const t = TILES[pa.tileIdx];
+    showModal(`
+      <div class="modal-icon">${t.icon}</div>
+      <div class="modal-title">${escapeHtml(t.name)}</div>
+      <div class="modal-text">Tu dois payer <strong>${t.amount} 🪙</strong> aux gardes du bambou.</div>
+      <div class="modal-actions">
+        ${isMine ? `<button class="btn-green" onclick="actionPayTax()">Payer</button>` : `<div class="modal-wait">${escapeHtml(cp.name)} paie...</div>`}
+      </div>
+    `);
+  } else if (pa.type === 'card'){
+    const deckLabel = pa.deck === 'caisse' ? 'Caisse Panda 📦' : 'Carte Bambou 🎴';
+    showModal(`
+      <div class="modal-icon">${pa.deck==='caisse'?'📦':'🎴'}</div>
+      <div class="modal-title">${deckLabel}</div>
+      <div class="modal-text">${escapeHtml(pa.msg)}</div>
+      <div class="modal-actions">
+        ${isMine ? `<button class="btn-green" onclick="actionResolveCard()">OK</button>` : `<div class="modal-wait">${escapeHtml(cp.name)} lit sa carte...</div>`}
+      </div>
+    `);
+  } else if (pa.type === 'bankrupt'){
+    const p = gs.players[pa.playerIdx];
+    showModal(`
+      <div class="modal-icon">💥</div>
+      <div class="modal-title">Faillite !</div>
+      <div class="modal-text"><strong>${escapeHtml(p.name)}</strong> ne peut plus payer.<br>Ses propriétés retournent au marché.</div>
+      <div class="modal-actions">
+        ${isMine || cp.id === myId ? `<button class="btn-green" onclick="actionConfirmBankrupt()">OK</button>` : `<div class="modal-wait">En attente...</div>`}
+      </div>
+    `);
+  } else if (pa.type === 'info'){
+    showModal(`
+      <div class="modal-icon">${pa.icon || 'ℹ️'}</div>
+      <div class="modal-title">${escapeHtml(pa.title || '')}</div>
+      <div class="modal-text">${escapeHtml(pa.msg || '')}</div>
+      <div class="modal-actions">
+        ${isMine ? `<button class="btn-green" onclick="actionDismissInfo()">OK</button>` : `<div class="modal-wait">En attente...</div>`}
+      </div>
+    `);
+  }
+}
+
+// ===== Création / Rejoindre =====
+async function createRoom(){
+  const code = Array.from({length:4},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ'[Math.floor(Math.random()*23)]).join('');
+  const state = {
+    phase:'waiting',
+    host: myId,
+    players: [makePlayer(myId, myName, myColor)],
+    houses: {},
+    currentPlayerIndex: 0,
+    turnPhase: 'preRoll',
+    dice: [null, null],
+    doubleCount: 0,
+    pendingAction: null,
+    log: [],
+    startTime: null,
+  };
+  const res = await sfetch('POST','/rest/v1/business_rooms',{id:code,state,updated_at:new Date().toISOString()});
+  if (res === null){ showError('Impossible de créer la partie.\n(Table business_rooms introuvable ?)'); return; }
+  roomId = code; gs = state;
+  showScreen('screen-lobby'); renderLobby(); startPoll();
+}
+
+async function joinRoom(code){
+  code = code.toUpperCase();
+  const state = await getRoom(code);
+  if (!state){ showError('Partie introuvable.'); return; }
+  if (state.phase !== 'waiting'){ showError('Cette partie a déjà commencé.'); return; }
+  if (state.players.length >= 4){ showError('Partie pleine (4/4).'); return; }
+  if (!state.players.find(p=>p.id===myId)){
+    const color = (myColor && !state.players.find(p=>p.color===myColor)) ? myColor : pickColor(state);
+    state.players.push(makePlayer(myId, myName, color));
+    await sfetch('PATCH',`/rest/v1/business_rooms?id=eq.${code}`,{state,updated_at:new Date().toISOString()});
+  }
+  roomId = code; gs = state;
+  showScreen('screen-lobby'); renderLobby(); startPoll();
+}
+
+function makePlayer(id, name, color){
+  return {
+    id, name, color,
+    money: START_MONEY,
+    position: 0,
+    properties: [],
+    inJail: false,
+    jailTurns: 0,
+    bankrupt: false,
+  };
+}
+
+async function startGame(){
+  if (!gs || gs.phase !== 'waiting') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  state.phase = 'playing';
+  state.startTime = new Date().toISOString();
+  state.log = [`🎲 La partie commence avec ${state.players.length} pandas !`];
+  await saveRoom(state);
+  gs = state; startTimer(); render();
+}
+
+// ===== Actions de tour =====
+async function rollDice(){
+  if (!gs || rolling) return;
+  const cp = gs.players[gs.currentPlayerIndex];
+  if (cp.id !== myId || cp.bankrupt) return;
+  if (gs.turnPhase !== 'preRoll' && gs.turnPhase !== 'doubleAgain') return;
+  if (gs.pendingAction) return;
+
+  rolling = true;
+  // Animation locale
+  const d1El = document.getElementById('die1');
+  const d2El = document.getElementById('die2');
+  if (d1El && d2El){
+    d1El.classList.add('rolling');
+    d2El.classList.add('rolling');
+    if (dieAnimTmr) clearInterval(dieAnimTmr);
+    dieAnimTmr = setInterval(()=>{
+      d1El.textContent = Math.ceil(Math.random()*6);
+      d2El.textContent = Math.ceil(Math.random()*6);
+    }, 80);
+    await new Promise(r=>setTimeout(r, 600));
+    clearInterval(dieAnimTmr);
+    d1El.classList.remove('rolling');
+    d2El.classList.remove('rolling');
+  }
+
+  const d1 = Math.ceil(Math.random()*6);
+  const d2 = Math.ceil(Math.random()*6);
+  const isDouble = d1 === d2;
+  const state = JSON.parse(JSON.stringify(gs));
+  state.dice = [d1, d2];
+  if (isDouble) state.doubleCount = (state.doubleCount || 0) + 1;
+  else state.doubleCount = 0;
+
+  const p = state.players[state.currentPlayerIndex];
+
+  // En prison
+  if (p.inJail){
+    if (isDouble){
+      p.inJail = false;
+      p.jailTurns = 0;
+      state.log.push(`🔓 ${p.name} sort du Zoo avec un double !`);
+      await movePlayer(state, p, d1 + d2);
+    } else {
+      p.jailTurns++;
+      state.log.push(`🔒 ${p.name} reste au Zoo (essai ${p.jailTurns}/3).`);
+      if (p.jailTurns >= 3){
+        p.money -= JAIL_FINE;
+        if (p.money < 0){ handleBankruptcyInline(state, p); rolling = false; gs = state; await saveRoom(state); render(); return; }
+        p.inJail = false;
+        p.jailTurns = 0;
+        state.log.push(`💸 ${p.name} paie 50🪙 et sort du Zoo.`);
+        await movePlayer(state, p, d1 + d2);
+      } else {
+        // Fin du tour
+        rolling = false;
+        gs = state;
+        await saveRoom(state);
+        render();
+        await advanceTurnAfterDelay();
+        return;
+      }
+    }
+  } else {
+    // 3 doubles d'affilée → zoo
+    if (state.doubleCount >= 3){
+      p.inJail = true;
+      p.jailTurns = 0;
+      p.position = JAIL_IDX;
+      state.dice = [d1, d2];
+      state.doubleCount = 0;
+      state.log.push(`🚨 ${p.name} a fait 3 doubles : direct au Zoo !`);
+      state.turnPhase = 'postAction';
+      rolling = false;
+      gs = state;
+      await saveRoom(state);
+      render();
+      return;
+    }
+    await movePlayer(state, p, d1 + d2);
+  }
+
+  rolling = false;
+  gs = state;
+  await saveRoom(state);
+  render();
+}
+
+async function movePlayer(state, player, steps){
+  const oldPos = player.position;
+  let newPos = (oldPos + steps) % 40;
+  if (newPos < oldPos || (steps > 0 && newPos === 0)){
+    player.money += GO_BONUS;
+    state.log.push(`💰 ${player.name} passe par Départ : +${GO_BONUS}🪙`);
+  }
+  player.position = newPos;
+  state.log.push(`🐾 ${player.name} avance de ${steps} → ${TILES[newPos].name}`);
+  resolveTileAction(state, player);
+}
+
+function resolveTileAction(state, player){
+  const t = TILES[player.position];
+  state.turnPhase = 'acting';
+
+  if (t.type === 'corner-go'){
+    state.turnPhase = setPhaseAfter(state);
+    return;
+  }
+  if (t.type === 'corner-parking'){
+    state.log.push(`🌿 ${player.name} se repose à la Bambouseraie.`);
+    state.turnPhase = setPhaseAfter(state);
+    return;
+  }
+  if (t.type === 'corner-jail'){
+    // visite seulement
+    state.turnPhase = setPhaseAfter(state);
+    return;
+  }
+  if (t.type === 'corner-gojail'){
+    player.inJail = true;
+    player.jailTurns = 0;
+    player.position = JAIL_IDX;
+    state.doubleCount = 0;
+    state.log.push(`🚓 ${player.name} est envoyé au Zoo !`);
+    state.turnPhase = 'postAction';
+    return;
+  }
+  if (t.type === 'tax'){
+    state.pendingAction = { type:'tax', tileIdx: player.position };
+    return;
+  }
+  if (t.type === 'carte' || t.type === 'caisse'){
+    const deck = t.type === 'caisse' ? CAISSE_PANDA_CARDS : CARTES_BAMBOU;
+    const card = deck[Math.floor(Math.random() * deck.length)];
+    state.pendingAction = { type:'card', deck: t.type, msg: card.msg, effect: card.effect };
+    return;
+  }
+  // Property / station / company
+  if (t.type === 'property' || t.type === 'station' || t.type === 'company'){
+    const owner = state.players.find(p=>!p.bankrupt && p.properties.includes(player.position));
+    if (!owner){
+      // libre → option achat
+      state.pendingAction = { type:'buy', tileIdx: player.position };
+      return;
+    }
+    if (owner.id === player.id){
+      // chez soi
+      state.log.push(`🏡 ${player.name} est chez lui.`);
+      state.turnPhase = setPhaseAfter(state);
+      return;
+    }
+    // payer loyer
+    const amount = getRent(state, player.position, state.dice);
+    state.pendingAction = { type:'rent', tileIdx: player.position, amount, fromId: player.id, toId: owner.id };
+    return;
+  }
+}
+
+function setPhaseAfter(state){
+  // si double et toujours en jeu → doubleAgain, sinon postAction
+  if (state.dice && state.dice[0] === state.dice[1] && !state.players[state.currentPlayerIndex].inJail){
+    return 'doubleAgain';
+  }
+  return 'postAction';
+}
+
+async function actionBuy(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'buy') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  const p = state.players[state.currentPlayerIndex];
+  const t = TILES[state.pendingAction.tileIdx];
+  if (p.money < t.price) return;
+  p.money -= t.price;
+  p.properties.push(state.pendingAction.tileIdx);
+  state.log.push(`🛒 ${p.name} achète ${t.name} pour ${t.price}🪙.`);
+  state.pendingAction = null;
+  state.turnPhase = setPhaseAfter(state);
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionSkipBuy(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'buy') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  state.log.push(`👋 ${state.players[state.currentPlayerIndex].name} passe son tour d'achat.`);
+  state.pendingAction = null;
+  state.turnPhase = setPhaseAfter(state);
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionPayRent(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'rent') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  const pa = state.pendingAction;
+  const payer = state.players[state.currentPlayerIndex];
+  const owner = state.players.find(p=>p.id===pa.toId);
+  if (payer.money >= pa.amount){
+    payer.money -= pa.amount;
+    owner.money += pa.amount;
+    state.log.push(`💸 ${payer.name} paie ${pa.amount}🪙 à ${owner.name}.`);
+    state.pendingAction = null;
+    state.turnPhase = setPhaseAfter(state);
+  } else {
+    handleBankruptcyInline(state, payer);
+  }
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionPayTax(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'tax') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  const t = TILES[state.pendingAction.tileIdx];
+  const p = state.players[state.currentPlayerIndex];
+  if (p.money >= t.amount){
+    p.money -= t.amount;
+    state.log.push(`💸 ${p.name} paie ${t.amount}🪙 (${t.name}).`);
+    state.pendingAction = null;
+    state.turnPhase = setPhaseAfter(state);
+  } else {
+    handleBankruptcyInline(state, p);
+  }
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionResolveCard(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'card') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  const pa = state.pendingAction;
+  const p = state.players[state.currentPlayerIndex];
+  const eff = pa.effect;
+  state.log.push(`🎴 ${p.name} : ${pa.msg}`);
+
+  if (eff.type === 'money'){
+    p.money += eff.amount;
+    if (p.money < 0){ handleBankruptcyInline(state, p); gs = state; await saveRoom(state); render(); return; }
+    state.pendingAction = null;
+    state.turnPhase = setPhaseAfter(state);
+  } else if (eff.type === 'collectAll'){
+    for (const other of state.players){
+      if (other.id === p.id || other.bankrupt) continue;
+      const take = Math.min(eff.amount, other.money);
+      other.money -= take;
+      p.money += take;
+    }
+    state.pendingAction = null;
+    state.turnPhase = setPhaseAfter(state);
+  } else if (eff.type === 'moveDelta'){
+    state.pendingAction = null;
+    const newPos = ((p.position + eff.delta) % 40 + 40) % 40;
+    p.position = newPos;
+    state.log.push(`🐾 ${p.name} arrive sur ${TILES[newPos].name}.`);
+    resolveTileAction(state, p);
+  } else if (eff.type === 'moveTo'){
+    state.pendingAction = null;
+    let target = eff.target;
+    if (eff.kind === 'station'){
+      target = STATION_IDX.find(idx => idx > p.position);
+      if (target === undefined) target = STATION_IDX[0];
+    }
+    if (target < p.position){
+      p.money += GO_BONUS;
+      state.log.push(`💰 ${p.name} passe par Départ : +${GO_BONUS}🪙`);
+    }
+    p.position = target;
+    state.log.push(`🐾 ${p.name} arrive sur ${TILES[target].name}.`);
+    resolveTileAction(state, p);
+  } else if (eff.type === 'jail'){
+    p.inJail = true;
+    p.jailTurns = 0;
+    p.position = JAIL_IDX;
+    state.doubleCount = 0;
+    state.pendingAction = null;
+    state.turnPhase = 'postAction';
+  }
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionDismissInfo(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'info') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  state.pendingAction = null;
+  state.turnPhase = setPhaseAfter(state);
+  gs = state; await saveRoom(state); render();
+}
+
+async function actionConfirmBankrupt(){
+  if (!gs.pendingAction || gs.pendingAction.type !== 'bankrupt') return;
+  const state = JSON.parse(JSON.stringify(gs));
+  state.pendingAction = null;
+  // Vérifier si la partie est finie (un seul restant)
+  const remaining = state.players.filter(p=>!p.bankrupt);
+  if (remaining.length <= 1){
+    state.phase = 'finished';
+    state.log.push(`🏆 ${remaining[0].name} remporte la partie !`);
+  } else {
+    state.turnPhase = 'postAction';
+  }
+  gs = state; await saveRoom(state); render();
+}
+
+function handleBankruptcyInline(state, player){
+  player.bankrupt = true;
+  player.money = 0;
+  // Libérer les propriétés
+  for (const idx of player.properties){
+    if (state.houses) delete state.houses[idx];
+  }
+  player.properties = [];
+  state.log.push(`💥 ${player.name} est en faillite ! Ses propriétés retournent au marché.`);
+  state.pendingAction = { type:'bankrupt', playerIdx: state.players.indexOf(player) };
+}
+
+async function payJail(){
+  const state = JSON.parse(JSON.stringify(gs));
+  const p = state.players[state.currentPlayerIndex];
+  if (p.id !== myId || !p.inJail) return;
+  if (p.money < JAIL_FINE){ showError('Pas assez de bambou !'); return; }
+  p.money -= JAIL_FINE;
+  p.inJail = false;
+  p.jailTurns = 0;
+  state.log.push(`💸 ${p.name} paie 50🪙 et sort du Zoo.`);
+  gs = state; await saveRoom(state); render();
+}
+
+async function endTurn(){
+  if (!gs || gs.turnPhase !== 'postAction') return;
+  const cp = gs.players[gs.currentPlayerIndex];
+  if (cp.id !== myId) return;
+  await advanceTurn();
+}
+
+async function advanceTurnAfterDelay(){
+  await new Promise(r=>setTimeout(r, 500));
+  await advanceTurn();
+}
+
+async function advanceTurn(){
+  const state = JSON.parse(JSON.stringify(gs));
+  // Trouver le prochain joueur non en faillite
+  let next = state.currentPlayerIndex;
+  let safety = 0;
+  do {
+    next = (next + 1) % state.players.length;
+    safety++;
+    if (safety > state.players.length + 1) break;
+  } while (state.players[next].bankrupt);
+  state.currentPlayerIndex = next;
+  state.dice = [null, null];
+  state.doubleCount = 0;
+  state.turnPhase = 'preRoll';
+  state.pendingAction = null;
+  gs = state; await saveRoom(state); render();
+}
+
+// ===== Construction =====
+function openBuildPanel(){
+  const cp = gs.players[gs.currentPlayerIndex];
+  if (cp.id !== myId) return;
+  const groups = [];
+  for (const color in COLOR_GROUPS){
+    const idxs = COLOR_GROUPS[color];
+    if (!idxs.every(i => cp.properties.includes(i))) continue;
+    const minH = Math.min(...idxs.map(i => gs.houses[i] || 0));
+    const t = TILES[idxs[0]];
+    groups.push({ color, idxs, minH, cost: t.houseCost });
+  }
+  if (groups.length === 0) return;
+  const rows = groups.map(g=>{
+    return `
+      <div class="build-row">
+        <div class="br-color ${g.color}"></div>
+        <div style="flex:1">
+          <div class="br-name">Groupe ${labelColor(g.color)}</div>
+          <div class="br-houses">Niveau actuel : ${g.minH}/5 — ${g.cost}🪙 / maison</div>
+        </div>
+        <button class="br-add" onclick="buildOne('${g.color}')" ${g.minH >= 5 || cp.money < g.cost ? 'disabled' : ''}>+</button>
+      </div>
+    `;
+  }).join('');
+  showModal(`
+    <div class="modal-icon">🏠</div>
+    <div class="modal-title">Construire</div>
+    <div class="modal-text" style="font-size:12px">Construis sur les groupes complets que tu possèdes.</div>
+    <div class="build-list">${rows}</div>
+    <div class="modal-actions">
+      <button class="btn-grey" onclick="hideModal()">Fermer</button>
+    </div>
+  `);
+}
+
+function labelColor(c){
+  return { violet:'Violet 🌸', lightblue:'Bleu clair 💧', pink:'Rose 🌷', orange:'Orange 🦊', red:'Rouge 🔥', yellow:'Jaune ☀️', green:'Vert 🌿', darkblue:'Bleu foncé 🌊' }[c] || c;
+}
+
+async function buildOne(color){
+  const state = JSON.parse(JSON.stringify(gs));
+  const cp = state.players[state.currentPlayerIndex];
+  const idxs = COLOR_GROUPS[color];
+  const minH = Math.min(...idxs.map(i => state.houses[i] || 0));
+  // Construire sur la propriété la moins développée du groupe
+  const target = idxs.find(i => (state.houses[i] || 0) === minH);
+  const t = TILES[target];
+  if (cp.money < t.houseCost) return;
+  if (minH >= 5) return;
+  cp.money -= t.houseCost;
+  state.houses[target] = (state.houses[target] || 0) + 1;
+  const lvl = state.houses[target];
+  state.log.push(`🏠 ${cp.name} construit sur ${t.name} (niveau ${lvl===5?'Hôtel':lvl}).`);
+  gs = state; await saveRoom(state); render();
+  openBuildPanel();
+}
+
+// ===== Info d'une case (clic plateau) =====
+function showTileInfo(idx){
+  const t = TILES[idx];
+  let detail = '';
+  if (t.type === 'property'){
+    detail = `Prix : ${t.price}🪙<br>Loyer base : ${t.rents[0]}🪙<br>Monopole : ${t.rents[1]}🪙<br>1🏠 ${t.rents[2]} • 2🏠 ${t.rents[3]} • 3🏠 ${t.rents[4]} • 4🏠 ${t.rents[5]} • 🏨 ${t.rents[6]}<br>Maison : ${t.houseCost}🪙`;
+  } else if (t.type === 'station'){
+    detail = `Gare panda<br>Loyer : 25/50/100/200🪙 selon possession`;
+  } else if (t.type === 'company'){
+    detail = `Compagnie panda<br>Loyer : 4× (ou 10× si 2 compagnies) la valeur des dés`;
+  } else if (t.type === 'tax'){
+    detail = `Tu paies ${t.amount}🪙`;
+  } else if (t.type === 'carte'){
+    detail = 'Pioche une Carte Bambou 🎴';
+  } else if (t.type === 'caisse'){
+    detail = 'Pioche une Caisse Panda 📦';
+  } else {
+    detail = t.name;
+  }
+  showModal(`
+    <div class="modal-icon">${t.icon || '🏞️'}</div>
+    <div class="modal-title">${escapeHtml(t.name)}</div>
+    <div class="modal-text">${detail}</div>
+    <div class="modal-actions">
+      <button class="btn-grey" onclick="hideModal()">Fermer</button>
+    </div>
+  `);
+}
+
+// ===== Événements UI =====
+function showError(msg){
+  const el = document.getElementById('home-error');
+  if (el){ el.textContent = msg; setTimeout(()=>{ if(el.textContent===msg) el.textContent=''; }, 5000); }
+}
+
+document.getElementById('color-picker').addEventListener('click', e=>{
+  const dot = e.target.closest('.color-dot');
+  if (!dot) return;
+  document.querySelectorAll('.color-dot').forEach(d=>d.classList.remove('selected'));
+  dot.classList.add('selected');
+  myColor = dot.dataset.c;
+  localStorage.setItem('business_color', myColor);
+});
+
+document.getElementById('btn-create').onclick = ()=>{
+  myName = document.getElementById('inp-pseudo').value.trim();
+  if (!myName){ showError('Entre ton pseudo !'); return; }
+  localStorage.setItem('business_pseudo', myName);
+  createRoom();
+};
+document.getElementById('btn-join-toggle').onclick = ()=>{
+  document.getElementById('join-panel').classList.toggle('hidden');
+  document.getElementById('inp-code').focus();
+};
+document.getElementById('btn-join').onclick = ()=>{
+  myName = document.getElementById('inp-pseudo').value.trim();
+  if (!myName){ showError('Entre ton pseudo !'); return; }
+  const code = document.getElementById('inp-code').value.trim();
+  if (code.length !== 4){ showError('Code à 4 lettres requis.'); return; }
+  localStorage.setItem('business_pseudo', myName);
+  joinRoom(code);
+};
+document.getElementById('inp-code').oninput = ()=>{
+  const el = document.getElementById('inp-code');
+  el.value = el.value.toUpperCase();
+};
+document.getElementById('inp-code').onkeydown = e=>{
+  if (e.key === 'Enter') document.getElementById('btn-join').click();
+};
+document.getElementById('btn-start').onclick = startGame;
+document.getElementById('btn-leave').onclick = async()=>{
+  if (gs && gs.phase === 'waiting'){
+    const st = JSON.parse(JSON.stringify(gs));
+    st.players = st.players.filter(p=>p.id !== myId);
+    if (st.players.length === 0){
+      await sfetch('DELETE',`/rest/v1/business_rooms?id=eq.${roomId}`);
+    } else {
+      if (st.host === myId) st.host = st.players[0].id;
+      await sfetch('PATCH',`/rest/v1/business_rooms?id=eq.${roomId}`,{state:st,updated_at:new Date().toISOString()});
+    }
+  }
+  stopPoll(); stopTimer(); roomId=''; gs=null; showScreen('screen-home');
+};
+document.getElementById('btn-replay').onclick = ()=>{
+  stopPoll(); stopTimer(); roomId=''; gs=null; showScreen('screen-home');
+};
+
+// Restaurer pseudo/couleur
+const savedName = localStorage.getItem('business_pseudo');
+if (savedName) document.getElementById('inp-pseudo').value = savedName;
+const savedColor = localStorage.getItem('business_color');
+if (savedColor){
+  myColor = savedColor;
+  document.querySelectorAll('.color-dot').forEach(d=>{
+    d.classList.toggle('selected', d.dataset.c === savedColor);
+  });
+}
+
+// Init plateau (vide, sans état)
+buildBoard();
+
+// Démarrer le timer dès qu'une partie est en cours
+const _origRender = render;
+let _timerStarted = false;
+function _maybeStartTimer(){
+  if (!_timerStarted && gs && gs.phase === 'playing' && gs.startTime){
+    _timerStarted = true;
+    startTimer();
+  }
+}
+// hook
+const _origRenderGame = renderGame;
+renderGame = function(){
+  _maybeStartTimer();
+  return _origRenderGame.apply(this, arguments);
+};
+</script>
+</body>
+</html>
