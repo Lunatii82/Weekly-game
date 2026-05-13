@@ -53,7 +53,7 @@
   <div class="game-topbar">
     <a href="../arcade/" class="topbar-back" title="Arcade">🐼</a>
     <span id="g-turn" class="turn-text">—</span>
-    <span id="g-timer" class="timer-text">30:00</span>
+    <span id="g-timer" class="timer-text">60:00</span>
   </div>
   <div class="game-main">
     <div class="board-wrap">
@@ -182,7 +182,7 @@ const JAIL_FINE = 50;
 const JAIL_IDX = 10;
 const GOJAIL_IDX = 30;
 const STATION_RENTS = [25,50,100,200];
-const GAME_DURATION_MS = 30 * 60 * 1000;
+const GAME_DURATION_MS = 60 * 60 * 1000;
 
 // ===== Identité joueur =====
 let myId = localStorage.getItem('business_pid') || (()=>{
@@ -199,6 +199,7 @@ let gs      = null; // game state (local copy)
 let pollTmr = null;
 let timerTmr = null;
 let rolling  = false;
+let saving   = false; // verrou pendant qu'une écriture Supabase est en vol
 let dieAnimTmr = null;
 
 // ===== Helpers Supabase =====
@@ -219,17 +220,28 @@ async function getRoom(id){
   return d&&d[0] ? d[0].state : null;
 }
 async function saveRoom(state){
-  return sfetch('PATCH',`/rest/v1/business_rooms?id=eq.${roomId}`,{state,updated_at:new Date().toISOString()});
+  validateAllPlayers(state, 'saveRoom');
+  saving = true;
+  try {
+    return await sfetch('PATCH',`/rest/v1/business_rooms?id=eq.${roomId}`,{state,updated_at:new Date().toISOString()});
+  } finally {
+    saving = false;
+  }
 }
 
 // ===== Polling =====
 function startPoll(){
   stopPoll();
   pollTmr = setInterval(async()=>{
-    if (rolling) return; // ne pas écraser pendant l'anim locale
+    // Verrous : ne jamais écraser un état local pendant une animation de dé
+    // ou pendant qu'on attend la confirmation d'une écriture Supabase
+    // (sinon on récupère l'ancien état serveur et on perd nos modifs locales).
+    if (rolling || saving) return;
     const ns = await getRoom(roomId);
     if (!ns) return;
+    if (saving) return; // double-check après l'await
     if (JSON.stringify(ns)!==JSON.stringify(gs)){
+      validateAllPlayers(ns, 'poll<-server');
       gs = ns;
       render();
     }
@@ -736,12 +748,59 @@ function makePlayer(id, name, color){
   };
 }
 
+// ===== Validation défensive — pas de fallback silencieux =====
+function validatePlayer(player, ctx){
+  if (!player){
+    console.error(`[BusinessTour] Joueur introuvable — origine: ${ctx}`);
+    return false;
+  }
+  if (typeof player.money !== 'number' || !Number.isFinite(player.money)){
+    console.error(`[BusinessTour] Argent corrompu pour "${player.name||player.id}" (valeur: ${JSON.stringify(player.money)}) — origine: ${ctx}`);
+    return false;
+  }
+  if (typeof player.position !== 'number'){
+    console.error(`[BusinessTour] Position corrompue pour "${player.name||player.id}" (valeur: ${JSON.stringify(player.position)}) — origine: ${ctx}`);
+    return false;
+  }
+  if (!Array.isArray(player.properties)){
+    console.error(`[BusinessTour] Propriétés corrompues pour "${player.name||player.id}" (valeur: ${JSON.stringify(player.properties)}) — origine: ${ctx}`);
+    return false;
+  }
+  return true;
+}
+function validateAllPlayers(state, ctx){
+  if (!state || !Array.isArray(state.players)) return false;
+  let ok = true;
+  for (const p of state.players) ok = validatePlayer(p, ctx) && ok;
+  return ok;
+}
+
 async function startGame(){
   if (!gs || gs.phase !== 'waiting') return;
   const state = JSON.parse(JSON.stringify(gs));
   state.phase = 'playing';
   state.startTime = new Date().toISOString();
+  // Réinitialisation explicite de TOUS les joueurs (hôte inclus) au lancement
+  // pour garantir un état propre et éviter toute valeur fantôme héritée du lobby.
+  state.players = state.players.map(p => ({
+    id: p.id,
+    name: p.name,
+    color: p.color,
+    money: START_MONEY,
+    position: 0,
+    properties: [],
+    inJail: false,
+    jailTurns: 0,
+    bankrupt: false,
+  }));
+  state.houses = {};
+  state.currentPlayerIndex = 0;
+  state.turnPhase = 'preRoll';
+  state.dice = [null, null];
+  state.doubleCount = 0;
+  state.pendingAction = null;
   state.log = [`🎲 La partie commence avec ${state.players.length} pandas !`];
+  validateAllPlayers(state, 'startGame');
   await saveRoom(state);
   gs = state; startTimer(); render();
 }
@@ -917,9 +976,11 @@ async function actionBuy(){
   const state = JSON.parse(JSON.stringify(gs));
   const p = state.players[state.currentPlayerIndex];
   const t = TILES[state.pendingAction.tileIdx];
+  if (!validatePlayer(p, 'actionBuy:pre')) return;
   if (p.money < t.price) return;
   p.money -= t.price;
   p.properties.push(state.pendingAction.tileIdx);
+  validatePlayer(p, 'actionBuy:post');
   state.log.push(`🛒 ${p.name} achète ${t.name} pour ${t.price}🪙.`);
   state.pendingAction = null;
   state.turnPhase = setPhaseAfter(state);
@@ -941,9 +1002,16 @@ async function actionPayRent(){
   const pa = state.pendingAction;
   const payer = state.players[state.currentPlayerIndex];
   const owner = state.players.find(p=>p.id===pa.toId);
+  if (!validatePlayer(payer, 'actionPayRent:payer') || !validatePlayer(owner, 'actionPayRent:owner')) return;
+  if (typeof pa.amount !== 'number' || !Number.isFinite(pa.amount)){
+    console.error(`[BusinessTour] Montant de loyer invalide (${JSON.stringify(pa.amount)}) — origine: actionPayRent`);
+    return;
+  }
   if (payer.money >= pa.amount){
     payer.money -= pa.amount;
     owner.money += pa.amount;
+    validatePlayer(payer, 'actionPayRent:post-payer');
+    validatePlayer(owner, 'actionPayRent:post-owner');
     state.log.push(`💸 ${payer.name} paie ${pa.amount}🪙 à ${owner.name}.`);
     state.pendingAction = null;
     state.turnPhase = setPhaseAfter(state);
@@ -975,20 +1043,36 @@ async function actionResolveCard(){
   const pa = state.pendingAction;
   const p = state.players[state.currentPlayerIndex];
   const eff = pa.effect;
+  if (!validatePlayer(p, 'actionResolveCard:pre')) return;
+  if (!eff || typeof eff.type !== 'string'){
+    console.error(`[BusinessTour] Effet de carte invalide (${JSON.stringify(eff)}) — origine: actionResolveCard`);
+    return;
+  }
   state.log.push(`🎴 ${p.name} : ${pa.msg}`);
 
   if (eff.type === 'money'){
+    if (typeof eff.amount !== 'number'){
+      console.error(`[BusinessTour] Carte 'money' sans montant valide (${JSON.stringify(eff.amount)}) — origine: actionResolveCard`);
+      return;
+    }
     p.money += eff.amount;
+    validatePlayer(p, 'actionResolveCard:money');
     if (p.money < 0){ handleBankruptcyInline(state, p); gs = state; await saveRoom(state); render(); return; }
     state.pendingAction = null;
     state.turnPhase = setPhaseAfter(state);
   } else if (eff.type === 'collectAll'){
+    if (typeof eff.amount !== 'number'){
+      console.error(`[BusinessTour] Carte 'collectAll' sans montant valide — origine: actionResolveCard`);
+      return;
+    }
     for (const other of state.players){
       if (other.id === p.id || other.bankrupt) continue;
+      if (!validatePlayer(other, 'actionResolveCard:collectAll:other')) continue;
       const take = Math.min(eff.amount, other.money);
       other.money -= take;
       p.money += take;
     }
+    validatePlayer(p, 'actionResolveCard:collectAll:post');
     state.pendingAction = null;
     state.turnPhase = setPhaseAfter(state);
   } else if (eff.type === 'moveDelta'){
@@ -1254,6 +1338,41 @@ if (savedColor){
     d.classList.toggle('selected', d.dataset.c === savedColor);
   });
 }
+
+// ===== Calcul dynamique de la taille du plateau =====
+// Recalcule --case-size et --board-size selon la taille de la fenêtre,
+// en respectant les breakpoints du layout (panneau à droite vs en bas).
+function updateBoardSize(){
+  const root = document.documentElement;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+
+  let maxSize;
+  if (w >= 1200){
+    // Plateau à gauche, panneau (280px) à droite
+    maxSize = Math.min(w - 340, h - 100);
+  } else if (w >= 768){
+    // Plateau en haut, panneau scrollable en bas
+    maxSize = Math.min(w - 40, h - 280);
+  } else {
+    // Mobile : plateau scrollable horizontalement si besoin
+    maxSize = Math.min(w - 24, h - 360);
+  }
+
+  // 11 cases + 10 gaps de 2px + 16px de padding interne = 11*case + 36
+  let caseSize = Math.floor((maxSize - 36) / 11);
+  // Bornes : ne descend pas sous 34px (sinon scroll horizontal), ne dépasse pas 68px
+  caseSize = Math.max(34, Math.min(68, caseSize));
+
+  const boardSize = caseSize * 11 + 10 * 2;
+  root.style.setProperty('--case-size', `${caseSize}px`);
+  root.style.setProperty('--board-size', `${boardSize}px`);
+}
+
+// Recalcul au chargement et à chaque redimensionnement
+window.addEventListener('resize', updateBoardSize);
+window.addEventListener('orientationchange', updateBoardSize);
+updateBoardSize();
 
 // Init plateau (vide, sans état)
 buildBoard();
